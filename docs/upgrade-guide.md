@@ -1,12 +1,13 @@
 # FinVault（锦仓）升级改造指南
 
-> 文档版本：v1.0  
+> 文档版本：v2.1（同步架构设计 v2.1 红队复盘定稿）  
 > 创建日期：2026-05-16  
+> 最近更新：2026-05-16  
 > 状态：已确认
 
 本文档是 FinVault 从本地单机部署升级到分布式/商业化部署的操作手册。每个升级场景都给出了具体的改动点、需要新增的文件和不需要动的文件。
 
-核心原则：**业务代码（service/、agent/、handler/、domain/）永远不需要改，只改基础设施层的工厂函数、配置文件，以及新增实现文件。**
+核心原则：**业务代码（service/、handler/、domain/）永远不需要改，只改基础设施层的工厂函数、配置文件以及 `internal/bootstrap/wire.go` 组装逻辑，并新增实现文件。**
 
 ---
 
@@ -14,29 +15,39 @@
 
 | 维度 | 本地阶段 | 分布式升级 | 代码改动量 |
 |------|---------|-----------|-----------|
-| 数据库 | SQLite | PostgreSQL / MySQL / TDSQL | 改配置文件 |
-| 缓存 | 进程内 map | Redis 单机/集群 | 改配置文件 |
-| AI 模型 | langchaingo 直连 | 不变（可加限流中间件） | 无 |
+| 数据库 | SQLite | PostgreSQL / MySQL / TDSQL | 改配置文件 + 引入 golang-migrate |
+| 缓存 | 进程内 sync.Map | Redis 单机/集群 | 改配置文件 |
+| AI 客户端 | go-openai 直连 | 不变（可加限流中间件） | 无 |
+| AI 框架 | 不引入 | 按需引入 Eino（复杂 Multi-Agent） | 新增 `llm/eino.go` 实现 LLMProvider |
+| ID 生成 | UUID v7（google/uuid） | 可选 Snowflake | 新增 `id/snowflake.go` 实现 IDGenerator |
+| DB 迁移 | GORM AutoMigrate | golang-migrate | 新增 `database/golang_migrate.go` + 重组 `migrations/` |
+| 报表导出 | Excel + Markdown | + 服务端 PDF | 新增 `report/pdf.go` |
+| 依赖注入 | 手写 `bootstrap/wire.go` | google/wire 生成 | 拆 ProviderSet + `wire_gen.go` |
 | 事件总线 | Go channel | NATS / Kafka | 新增实现文件 + 改工厂注册 |
 | 会话管理 | 内存 map | Redis Session | 新增实现文件 + 改配置 |
 | 定时任务 | Go cron 单机 | etcd 选主分布式调度 | 新增实现文件 + 改配置 |
-| 认证鉴权 | 简单密码 | JWT / OAuth2 | 新增中间件 |
-| 用户体系 | 单用户 | 多用户 + 数据隔离 | 新增模块 |
-| 日志 | 本地文件/控制台 | 结构化 JSON + ELK | 改配置 |
+| 认证鉴权 | JWT 单用户 | JWT / OAuth2 + 多用户 | 新增中间件 + 新增模块 |
+| 用户体系 | 单用户（user_id=1） | 多用户 + 数据隔离 | 新增模块 |
+| 日志 | slog 控制台 | slog JSON + ELK | 改配置 |
 | 微信小程序 | 无 | 新增小程序认证+API | 新增中间件+Handler |
 
 ---
 
 ## 2. 数据库升级：SQLite → PostgreSQL / MySQL / TDSQL
 
+> 🔑 **v2.1 关键变更**：本阶段必须同步引入 `golang-migrate`。本地 SQLite 阶段使用 GORM `AutoMigrate`，一旦接入生产数据库，**禁用 AutoMigrate**，所有模型变更一律走刷版本化迁移脚本。
+
 ### 2.1 改动清单
 
 | 操作 | 文件 | 说明 |
 |------|------|------|
-| 修改 | `configs/prod.yaml` | `database.driver` 改为 `postgres` 或 `mysql`，`database.dsn` 改为对应连接串 |
+| 修改 | `configs/prod.yaml` | `database.driver` 改为 `postgres` 或 `mysql`，`database.dsn` 改为对应连接串；新增 `database.migrate.driver: golang-migrate` |
 | 确认 | `internal/database/postgres.go` | 已有初始化函数 |
 | 确认 | `internal/database/mysql.go` | 已有初始化函数 |
-| 执行 | 数据迁移 | 运行 GORM AutoMigrate 或手动迁移脚本 |
+| **新增** | `internal/database/golang_migrate.go` | 基于 `golang-migrate/migrate` 的 `Migrator` 实现 |
+| **重组** | `migrations/` | 从人工参考脚本重组为 `001_init.up.sql` / `001_init.down.sql` 标准格式 |
+| **修改** | `internal/bootstrap/wire.go` | `database.NewAutoMigrator(db)` 换为 `database.NewGolangMigrator(db, cfg.Database.Migrate)` |
+| 执行 | 数据迁移 | 先跑一次性脚本从 SQLite 迁移存量数据，再起服务 |
 | 无需改动 | `internal/repository/gorm/*.go` | GORM 实现与驱动无关 |
 | 无需改动 | `internal/service/*.go` | 只依赖 Repository 接口 |
 | 无需改动 | `internal/handler/*.go` | 只依赖 Service |
@@ -45,14 +56,18 @@
 
 1. 安装目标数据库（PostgreSQL / MySQL / TDSQL）
 2. 创建数据库和用户
-3. 修改配置文件：
+3. **击打迁移脚本**：`migrate -path migrations -database "$DSN" up`
+4. 修改配置文件：
    ```yaml
    database:
      driver: postgres    # 或 mysql / tdsql
      dsn: "host=db port=5432 user=finvault password=xxx dbname=finvault sslmode=disable"
+     migrate:
+       driver: golang-migrate    # 生产环境必须；本地默认 automigrate
+       source: "file://migrations"
    ```
-4. 启动服务，GORM AutoMigrate 自动建表
-5. 如需迁移已有 SQLite 数据，编写一次性数据迁移脚本
+5. 启动服务，`Migrator` 工厂返回 `golangMigrator`，不再调用 `db.AutoMigrate`
+6. 如需迁移已有 SQLite 数据，编写一次性数据迁移脚本
 
 ### 2.3 迁移脚本参考
 
@@ -131,6 +146,8 @@ cache:
 
 ## 4. AI 模型切换与扩展
 
+> 🔑 **v2.1 说明**：第一阶段 AI 适配层只实现了一个 `OpenAIProvider`（覆盖全部 OpenAI 协议兼容模型）。其他提升都以**新增 `LLMProvider` 实现**的方式进行，业务层代码不动。
+
 ### 4.1 切换已有模型
 
 只需修改配置文件：
@@ -159,13 +176,11 @@ llm:
 **步骤 2**：如果新模型兼容 OpenAI 协议，无需写代码；如不兼容，新增 Provider 实现
 
 ```go
-// agent/qwen.go（仅在不兼容 OpenAI 协议时需要）
+// internal/llm/qwen_native.go（仅在不兼容 OpenAI 协议时需要）
 
-type qwenProvider struct {
-    // 自定义实现
-}
+type qwenProvider struct { /* 自定义实现 */ }
 
-func (p *qwenProvider) Chat(ctx context.Context, messages []Message) (*Response, error) {
+func (p *qwenProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
     // 自定义调用逻辑
 }
 // ... 实现 LLMProvider 接口的其他方法
@@ -174,12 +189,31 @@ func (p *qwenProvider) Chat(ctx context.Context, messages []Message) (*Response,
 **步骤 3**：在 `LLMRegistry` 注册新 Provider
 
 ```go
-// agent/registry.go 中 NewLLMRegistry 函数增加分支
+// internal/llm/registry.go 中 NewRegistry 函数增加分支
 case "qwen":
     registry.providers["qwen"] = newQwenProvider(cfg)
 ```
 
-### 4.3 AI 限流（商业化场景）
+### 4.3 升级到 Eino（复杂 Multi-Agent 场景）
+
+**什么时候需要？**
+
+- 出现「多 Agent 协作」需求（例如：市场分析 Agent + 个人额度 Agent + 交易执行 Agent 串联）
+- 需要复杂 Graph / DAG 编排，手写 Tool Calling 循环已难以控制
+- 需要与 MCP 协议对接（调用外部 MCP Server）
+- 需要复杂 Memory（超过“最近 N 轮”以外的长期记忆、向量检索记忆）
+
+**升级动作**：
+
+| 操作 | 文件 | 说明 |
+|------|------|------|
+| 新增 | `internal/llm/eino.go` | `EinoProvider` 实现 `LLMProvider` 接口 |
+| 新增 | `internal/agent/`（可选） | 如需复杂编排，在这里写 Eino Graph |
+| 修改 | `internal/llm/registry.go` | `case "eino"` 分支 |
+| 修改 | `configs/prod.yaml` | `llm.providers.<name>.engine: eino` |
+| 无需改动 | 业务 Service | 仍然调用 `provider.ChatWithTools(...)` |
+
+### 4.4 AI 限流（商业化场景）
 
 商业化多用户场景下，需要对 AI 调用加限流：
 
@@ -210,7 +244,7 @@ func LLMRateLimit(cache cache.CacheProvider) gin.HandlerFunc {
 | 修改 | `internal/event/factory.go` | 工厂函数增加 NATS 分支 |
 | 修改 | `configs/prod.yaml` | 增加 event 配置 |
 | 无需改动 | `internal/service/*.go` | 只依赖 EventBus 接口 |
-| 无需改动 | `internal/agent/*.go` | 只依赖 EventBus 接口 |
+| 无需改动 | `internal/llm/*.go` | LLM 适配层不依赖事件总线 |
 
 ### 5.2 NATS 实现参考
 
@@ -295,12 +329,12 @@ func (r *gormHoldingRepo) List(ctx context.Context, opts ListOptions) ([]Holding
 
 所有业务表增加 `user_id` 字段：
 
-```go
-// 迁移脚本
-ALTER TABLE holdings ADD COLUMN user_id BIGINT NOT NULL DEFAULT 1;
-ALTER TABLE transactions ADD COLUMN user_id BIGINT NOT NULL DEFAULT 1;
+```sql
+-- 迁移脚本
+ALTER TABLE t_fv_core_holdings ADD COLUMN f_user_id BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE t_fv_core_transactions ADD COLUMN f_user_id BIGINT NOT NULL DEFAULT 1;
 -- ... 其他表
-CREATE INDEX idx_holdings_user_id ON holdings(user_id);
+CREATE INDEX idx_holdings_user_id ON t_fv_core_holdings(f_user_id);
 ```
 
 本地单用户数据默认 user_id = 1。
@@ -337,7 +371,7 @@ CREATE INDEX idx_holdings_user_id ON holdings(user_id);
 | 修改 | `internal/middleware/auth.go` | 支持 Web Session 和微信 Token 双认证 |
 | 修改 | `configs/prod.yaml` | 新增微信小程序 appid/secret 配置 |
 | 无需改动 | `internal/service/*.go` | 业务逻辑不变 |
-| 无需改动 | `internal/agent/*.go` | Agent 逻辑不变 |
+| 无需改动 | `internal/llm/*.go` | LLM 适配层不变 |
 | 无需改动 | `internal/repository/gorm/*_repo.go` | 数据访问不变 |
 
 ### 7.4 微信登录流程
@@ -375,7 +409,7 @@ wechat:
 | 修改 | `internal/scheduler/factory.go` | 工厂函数增加分布式调度分支 |
 | 修改 | `configs/prod.yaml` | 增加 scheduler 配置 |
 | 无需改动 | `internal/service/*.go` | Service 中的业务逻辑不变 |
-| 无需改动 | `internal/agent/*.go` | Agent 逻辑不变 |
+| 无需改动 | `internal/llm/*.go` | LLM 适配层不变 |
 
 ### 8.2 调度器抽象接口
 
@@ -546,7 +580,31 @@ log:
 
 ---
 
-## 11. 升级检查清单
+## 11. 第二阶段依赖升级清单（v2.1 新增）
+
+本节集中汇总第一阶段「推迟引入」的依赖库及其触发升级的具体条件。出现任一事件时，按表中提供的「升级包名 + 变动点」依次推进：
+
+| # | 包名 | 触发引入条件 | 实现的接口 | 主要变动点 | 业务代码是否变动 |
+|---|------|-------------|-----------|-----------|-----------------|
+| 1 | `golang-migrate/migrate` | 接入 PostgreSQL / MySQL / TDSQL（本文档第 2 节） | `database.Migrator` | 新增 `database/golang_migrate.go`；`migrations/` 重组为 `001_xxx.up.sql` / `001_xxx.down.sql`；修改 `bootstrap/wire.go` 工厂选择 | 否 |
+| 2 | `cloudwego/eino` | 出现复杂 Multi-Agent 协作 / Graph 编排 / MCP 对接 需求（本文档 4.3 节） | `llm.LLMProvider` | 新增 `internal/llm/eino.go`；`llm.NewRegistry` 增加 `case "eino"` 分支；`configs/*.yaml` 增加 `engine: eino` 字段 | 否 |
+| 3 | `bwmarrin/snowflake` | 多节点分布式部署，需要更短的纯数字 ID，或资数据库希望 BIGINT 主键序列 | `id.IDGenerator` | 新增 `internal/id/snowflake.go`；`bootstrap/wire.go` 切换 `id.NewSnowflakeGenerator` | 否 |
+| 4 | `signintech/gopdf`（或 wkhtmltopdf 二进制） | 用户明确要求服务端生成 PDF（高保真报表、批量邮件推送等） | `report.ReportExporter` | 新增 `internal/report/pdf.go`；`bootstrap/wire.go` 注入 `pdfExporter` | 否（`ReportService` 已按 `Format` 多型调度） |
+| 5 | `google/wire` | `bootstrap/wire.go` 超过 200 行，或手写初始化链超过 30 个组件 | 仅重构 `bootstrap/` | 拆分 `InfraSet` / `RepoSet` / `LLMSet` / `ServiceSet` / `HandlerSet`；`go generate ./...` 生成 `wire_gen.go`；`main.go` 调用生成函数 | 否 |
+
+### 11.1 升级顺序建议
+
+1. **上生产前**：golang-migrate 必选；snowflake 如果一开始就多节点也选上
+2. **需求驱动**：eino / gopdf 按业务场景上出时才引入
+3. **代码规模驱动**：wire 在组件数超过阈值时再引入
+
+### 11.2 升级验收奇诶点
+
+- 业务包（`internal/service/`、`internal/handler/`、`internal/domain/`）的 import 是否仍然只包含本项目接口包，未引入任何 `eino` / `migrate` / `snowflake` / `gopdf` / `wire` 的直接 import。如出现，代表抽象泄露，需走读 code review 反驳。
+
+---
+
+## 12. 升级检查清单
 
 每次升级时，按以下清单逐项确认：
 
@@ -555,7 +613,7 @@ log:
 - [ ] 工厂函数已注册新实现
 - [ ] 数据库迁移脚本已准备
 - [ ] 环境变量已设置（API Key、数据库密码等）
-- [ ] 业务代码（service/、agent/、handler/、domain/）未修改
+- [ ] 业务代码（service/、handler/、domain/，AI 适配层 llm/除实现文件外的接口及工厂）未修改
 - [ ] 集成测试通过
 - [ ] 回滚方案已准备
 - [ ] 定时任务调度方式已确认（local / etcd）
