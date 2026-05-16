@@ -37,6 +37,30 @@ FinVault 的核心设计约束：**本地起步，升级改动最小**。
 | go-openai SDK | 不是 Agent 框架，缺少 Tool/Chain/Memory 等能力 |
 | 各厂商 Go Agent SDK | 厂商锁定，与"支持不同大模型"需求冲突 |
 
+### 2.2 Go Agent 框架选型
+
+本项目 AI 能力是核心需求（买卖建议、盈亏分析、报表生成等），需要 Agent 框架支撑。Go 生态中主要 Agent 框架对比如下：
+
+| 框架 | 成熟度 | 模型支持 | Agent 能力 | 流式输出 | RAG | 社区 |
+|------|--------|---------|-----------|---------|-----|------|
+| **langchaingo** | ⭐⭐⭐⭐ | OpenAI/DeepSeek/GLM/Ollama/Anthropic 等 | ReAct Agent、Tool Calling、Chain、Memory | ✅ | ✅ 内置 | 活跃 |
+| go-openai | ⭐⭐⭐⭐⭐ | 仅 OpenAI 兼容接口 | ❌ 无，纯 API 调用 | ✅ | ❌ | 官方维护 |
+| 各大厂 Go Agent SDK | ⭐⭐ | 绑定特定厂商 | 有但受限 | 不确定 | 不确定 | 弱 |
+
+**最终选择：langchaingo + 自建 Provider 抽象层**
+
+选型理由：
+
+1. **langchaingo 解决 80% 的基础能力**：统一的 `llms` 模型接口、`Chains` 链式调用、`Agents` 推理+工具调用、`Memory` 对话记忆、`Tools` 工具注册——这些 FinVault 都需要
+2. **自建 Provider 抽象层解决 langchaingo 的不足**：langchaingo 的模型接入方式不够灵活，部分模型需要绕路。通过 `LLMProvider` 接口封装，业务代码不直接依赖 langchaingo，未来可替换底层框架而不影响业务
+3. **关键场景落地路径清晰**：
+   - 盈亏分析 → Agent + 注册财务数据查询 Tool
+   - 买卖建议 → Agent + 行情数据 Tool + 市场分析 Prompt
+   - 智能问答 → Chain + Memory + RAG（检索理财知识）
+   - 周报/月报/年报 → Chain（数据采集→分析→模板渲染）
+   - 多模型切换 → Provider 抽象层 + 配置热更新
+4. **架构演进友好**：本地阶段 langchaingo 直连各模型 API；商业化阶段可引入消息队列解耦、多实例 Agent 调度；未来换框架只需替换 Provider 实现，业务代码不变
+
 ## 3. 分层架构
 
 ```

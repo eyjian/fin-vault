@@ -19,10 +19,11 @@
 | AI 模型 | langchaingo 直连 | 不变（可加限流中间件） | 无 |
 | 事件总线 | Go channel | NATS / Kafka | 新增实现文件 + 改工厂注册 |
 | 会话管理 | 内存 map | Redis Session | 新增实现文件 + 改配置 |
-| 定时任务 | Go ticker | 分布式调度器 | 新增调度模块 |
+| 定时任务 | Go cron 单机 | etcd 选主分布式调度 | 新增实现文件 + 改配置 |
 | 认证鉴权 | 简单密码 | JWT / OAuth2 | 新增中间件 |
 | 用户体系 | 单用户 | 多用户 + 数据隔离 | 新增模块 |
-| 日志 | 本地文件 | 结构化日志 + ELK | 改配置 |
+| 日志 | 本地文件/控制台 | 结构化 JSON + ELK | 改配置 |
+| 微信小程序 | 无 | 新增小程序认证+API | 新增中间件+Handler |
 
 ---
 
@@ -324,9 +325,194 @@ CREATE INDEX idx_holdings_user_id ON holdings(user_id);
 /api/v1/admin/    # 管理后台 API（商业化后新增）
 ```
 
+### 7.3 微信小程序升级改动清单
+
+| 操作 | 文件 | 说明 |
+|------|------|------|
+| 新增 | `internal/middleware/wechat.go` | 微信登录认证中间件 |
+| 新增 | `internal/handler/wechat_auth_handler.go` | 微信 code2session 登录 |
+| 新增 | `internal/domain/wechat_user.go` | 微信用户绑定模型 |
+| 新增 | `internal/repository/gorm/wechat_user_repo.go` | 微信用户仓储 |
+| 修改 | `internal/handler/routes.go` | 新增 `/api/v1/mini/` 路由组 |
+| 修改 | `internal/middleware/auth.go` | 支持 Web Session 和微信 Token 双认证 |
+| 修改 | `configs/prod.yaml` | 新增微信小程序 appid/secret 配置 |
+| 无需改动 | `internal/service/*.go` | 业务逻辑不变 |
+| 无需改动 | `internal/agent/*.go` | Agent 逻辑不变 |
+| 无需改动 | `internal/repository/gorm/*_repo.go` | 数据访问不变 |
+
+### 7.4 微信登录流程
+
+```
+小程序 wx.login() → code → 后端 /api/v1/mini/auth/login
+                                    ↓
+                        调用微信 code2session API 获取 openid
+                                    ↓
+                        查找或创建 WechatUser 绑定记录
+                                    ↓
+                        生成 JWT Token 返回小程序
+```
+
+### 7.5 微信小程序配置
+
+```yaml
+# configs/prod.yaml
+wechat:
+  mini:
+    appid: "${WECHAT_MINI_APPID}"
+    secret: "${WECHAT_MINI_SECRET}"
+```
+
 ---
 
-## 8. 分布式部署架构参考
+## 8. 定时任务升级：Go ticker → 分布式调度
+
+### 8.1 改动清单
+
+| 操作 | 文件 | 说明 |
+|------|------|------|
+| 新增 | `internal/scheduler/scheduler.go` | 分布式调度器接口定义 |
+| 新增 | `internal/scheduler/etcd_scheduler.go` | 基于 etcd 的分布式锁调度（推荐） |
+| 修改 | `internal/scheduler/factory.go` | 工厂函数增加分布式调度分支 |
+| 修改 | `configs/prod.yaml` | 增加 scheduler 配置 |
+| 无需改动 | `internal/service/*.go` | Service 中的业务逻辑不变 |
+| 无需改动 | `internal/agent/*.go` | Agent 逻辑不变 |
+
+### 8.2 调度器抽象接口
+
+```go
+// internal/scheduler/interfaces.go
+
+type Job struct {
+    Name     string
+    CronExpr string          // cron 表达式
+    Handler  func(ctx context.Context) error
+}
+
+type Scheduler interface {
+    Register(job Job) error
+    Start() error
+    Stop() error
+}
+```
+
+本地阶段实现——基于 `robfig/cron` 的单机调度：
+
+```go
+// internal/scheduler/local_scheduler.go
+
+type localScheduler struct {
+    cron *cron.Cron
+}
+
+func newLocalScheduler() *localScheduler {
+    return &localScheduler{cron: cron.New()}
+}
+
+func (s *localScheduler) Register(job Job) error {
+    return s.cron.AddFunc(job.CronExpr, func() {
+        job.Handler(context.Background())
+    })
+}
+```
+
+分布式阶段实现——基于 etcd 选主 + robfig/cron：
+
+```go
+// internal/scheduler/etcd_scheduler.go
+
+type etcdScheduler struct {
+    cron    *cron.Cron
+    client  *clientv3.Client
+    lease   *lease.Client
+    isLeader bool
+}
+
+// 同一时刻只有一个实例获得锁并执行定时任务
+// 其他实例作为热备，leader 故障时自动接管
+```
+
+### 8.3 配置变更
+
+```yaml
+# 本地阶段（默认）
+scheduler:
+  driver: local
+
+# 分布式阶段
+scheduler:
+  driver: etcd
+  etcd:
+    endpoints:
+      - "etcd1:2379"
+      - "etcd2:2379"
+      - "etcd3:2379"
+    lock_prefix: "/finvault/scheduler/"
+```
+
+### 8.4 常用定时任务
+
+| 任务 | Cron 表达式 | 说明 |
+|------|-----------|------|
+| 行情数据同步 | `0 9,15 * * 1-5` | 工作日 9:00 和 15:00 同步 |
+| 净值数据同步 | `0 20 * * 1-5` | 工作日 20:00 同步基金净值 |
+| 到期提醒检查 | `0 8 * * *` | 每天 8:00 检查理财到期 |
+| 日收益计算 | `0 21 * * *` | 每天 21:00 计算当日收益 |
+| 周报生成 | `0 10 * * 6` | 每周六 10:00 生成周报 |
+| 月报生成 | `0 10 1 * *` | 每月 1 日 10:00 生成月报 |
+
+---
+
+## 9. 日志升级：本地文件 → 结构化日志 + ELK
+
+### 9.1 改动清单
+
+| 操作 | 文件 | 说明 |
+|------|------|------|
+| 修改 | `internal/config/config.go` | 日志配置增加 ELK 相关字段 |
+| 修改 | `internal/middleware/logger.go` | 日志中间件适配结构化输出 |
+| 无需改动 | `internal/service/*.go` | 业务逻辑不直接依赖日志格式 |
+| 无需改动 | `internal/handler/*.go` | Handler 不关心日志输出方式 |
+
+### 9.2 日志库选型
+
+本地阶段使用 Go 标准库 `log` 或 `slog`（Go 1.21+）；商业化阶段可切换为 `zap` + ELK：
+
+```go
+// 日志抽象，方便后续切换
+type Logger interface {
+    Debug(msg string, fields ...Field)
+    Info(msg string, fields ...Field)
+    Warn(msg string, fields ...Field)
+    Error(msg string, fields ...Field)
+}
+
+type Field struct {
+    Key   string
+    Value any
+}
+```
+
+### 9.3 配置变更
+
+```yaml
+# 本地阶段
+log:
+  level: debug
+  format: console    # 控制台友好输出
+
+# 生产阶段
+log:
+  level: info
+  format: json       # 结构化 JSON，方便 ELK 采集
+  output: /var/log/finvault/app.log
+  max_size: 200      # MB
+  max_backups: 10
+  max_age: 30        # 天
+```
+
+---
+
+## 10. 分布式部署架构参考
 
 ```
                     ┌─────────────┐
@@ -360,7 +546,7 @@ CREATE INDEX idx_holdings_user_id ON holdings(user_id);
 
 ---
 
-## 9. 升级检查清单
+## 11. 升级检查清单
 
 每次升级时，按以下清单逐项确认：
 
@@ -372,3 +558,7 @@ CREATE INDEX idx_holdings_user_id ON holdings(user_id);
 - [ ] 业务代码（service/、agent/、handler/、domain/）未修改
 - [ ] 集成测试通过
 - [ ] 回滚方案已准备
+- [ ] 定时任务调度方式已确认（local / etcd）
+- [ ] 日志格式已切换（console / json）
+- [ ] 微信小程序配置已准备（如涉及）
+- [ ] 新增中间件已注册到路由（JWT / 微信认证 / 限流等）
