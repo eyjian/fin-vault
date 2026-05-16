@@ -10,6 +10,12 @@
 #
 # 数组字段（如 skills）是"低层完全替换高层"，不是"合并追加"——这正是我们需要的。
 #
+# Skill 引用语法 `<scope>:<name>` / `<name>`（不带 scope 时按 workspace>global>builtin 查找）。
+# 我们项目级 skill 文件名不带 `fin-vault-` 前缀，scope 由 `.ai-rd-team/skills/` 路径自动判定。
+#
+# ⚠️ 已知风险：`builtin:code-review-checklist` 在 ai-rd-team builtin skills 实现完成前
+# 可能 SkillNotFoundError。届时需要降级为去掉这一引用，或新增同名 workspace skill 占位。
+#
 # 见 docs/ai-rd-team-onboarding.md §6 + §7.2。
 
 # Bridge 超时调高，避免 go-openai Tool Calling 多轮时被掐断
@@ -22,28 +28,28 @@ roles:
   architect:
     skills:
       - "builtin:code-review-checklist"
-      - "fin-vault-go-gin"
-      - "fin-vault-naming"
+      - "go-gin-development"
+      - "naming-conventions"
 
   # 开发者：写代码的高频规范，Provider/error 由 reviewer 兜底
   developer:
     skills:
-      - "fin-vault-go-gin"
-      - "fin-vault-naming"
-      - "fin-vault-decimal"
+      - "go-gin-development"
+      - "naming-conventions"
+      - "decimal-precision"
 
   # 评审：兜底 dev 没注入的两个高阶约束
   reviewer:
     skills:
       - "builtin:code-review-checklist"
-      - "fin-vault-error-handling"
-      - "fin-vault-llm-provider"
+      - "error-handling"
+      - "llm-provider-pattern"
 
   # 测试：了解分层结构 + 重点测金额计算
   tester:
     skills:
-      - "fin-vault-go-gin"
-      - "fin-vault-decimal"
+      - "go-gin-development"
+      - "decimal-precision"
 
 # 前端开发暂未启用（M1 只做后端）。M2 启动前端时，按下方注释解开：
 #
@@ -51,4 +57,4 @@ roles:
 #   developer_frontend:        # 自定义角色实例
 #     skills:
 #       - "builtin:vue3-development"
-#       - "fin-vault-vue3-frontend"
+#       - "vue3-frontend"      # 项目级前端规范，待 M2 创建
