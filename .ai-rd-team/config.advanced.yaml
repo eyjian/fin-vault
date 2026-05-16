@@ -1,0 +1,54 @@
+# fin-vault ai-rd-team 高级配置（Advanced 层）
+#
+# 关键作用：**显式覆盖**每个角色的 skills 列表，把框架默认的 Python 规范
+# （python-best-practices / pytest-guide）替换为本项目的 Go 规范，避免
+# 团队 prompt 同时注入两套语言规范造成行为漂移。
+#
+# 加载优先级（低层覆盖高层）：
+#   defaults.yaml < ~/.ai-rd-team/config.yaml < .ai-rd-team/config.yaml
+#     < .ai-rd-team/config.advanced.yaml  ← 本文件（最高优先）
+#
+# 数组字段（如 skills）是"低层完全替换高层"，不是"合并追加"——这正是我们需要的。
+#
+# 见 docs/ai-rd-team-onboarding.md §6 + §7.2。
+
+# Bridge 超时调高，避免 go-openai Tool Calling 多轮时被掐断
+adapter:
+  bridge_timeout_seconds: 300
+
+# 角色 → Skills 映射（每角色 ≤ 3 个，遵守 ai-rd-team 注意力上限约束）
+roles:
+  # 架构师：定切分、定接口、定命名
+  architect:
+    skills:
+      - "builtin:code-review-checklist"
+      - "fin-vault-go-gin"
+      - "fin-vault-naming"
+
+  # 开发者：写代码的高频规范，Provider/error 由 reviewer 兜底
+  developer:
+    skills:
+      - "fin-vault-go-gin"
+      - "fin-vault-naming"
+      - "fin-vault-decimal"
+
+  # 评审：兜底 dev 没注入的两个高阶约束
+  reviewer:
+    skills:
+      - "builtin:code-review-checklist"
+      - "fin-vault-error-handling"
+      - "fin-vault-llm-provider"
+
+  # 测试：了解分层结构 + 重点测金额计算
+  tester:
+    skills:
+      - "fin-vault-go-gin"
+      - "fin-vault-decimal"
+
+# 前端开发暂未启用（M1 只做后端）。M2 启动前端时，按下方注释解开：
+#
+# roles:
+#   developer_frontend:        # 自定义角色实例
+#     skills:
+#       - "builtin:vue3-development"
+#       - "fin-vault-vue3-frontend"

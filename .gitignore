@@ -5,3 +5,32 @@
 # iWiki plugin files
 .iwiki
 .vscode/iwiki-*.json
+
+# ai-rd-team 运行期产物（adapter-intents / state / reports / events.jsonl 等）
+.ai-rd-team/runtime/
+
+# 本地数据库与导出文件
+backend/data/
+backend/dist/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+
+# Go 构建产物
+bin/
+*.exe
+
+# 前端构建产物
+frontend/node_modules/
+frontend/dist/
+
+# IDE / OS
+.idea/
+.DS_Store
+Thumbs.db
+
+# ai-rd-team runtime（运行时状态、日志、归档；其余 .ai-rd-team 子目录入库）
+.ai-rd-team/runtime/
+.ai-rd-team/cache/
+.ai-rd-team/.lock

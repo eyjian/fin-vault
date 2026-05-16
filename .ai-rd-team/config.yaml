@@ -1,0 +1,22 @@
+## fin-vault ai-rd-team 项目级配置（Basic 层）
+##
+## 字段对齐 ai-rd-team v0.1.0b1 spec：openspec/specs/design/10-config-schema.md §3A
+## 完整字段（advanced）由 `ai-rd-team config advanced` 生成 config.advanced.yaml
+##
+## 重新生成本文件：`ai-rd-team init --yes`（会读 README/REQUIREMENT.md 推断默认）
+
+config_version: "1.0"
+
+project:
+  description: "FinVault（锦仓）个人理财管理系统：基金/股票/理财/现金 多平台多币种集中管理；本地起步、升级改动最小；接 DeepSeek/GLM/Kimi/通义/Ollama 多模型 AI 能力。详见 REQUIREMENT.md"
+
+run_mode: standard          # lite / standard / full
+
+tech_stack:
+  backend: go-gin           # 项目使用 Gin，不使用 builtin 的 go-kratos-backend skill
+  frontend: vue3            # 复用 ai-rd-team builtin:vue3-development skill
+  mobile: null              # 微信小程序属第三阶段（见 REQUIREMENT.md §3）
+
+budget:
+  per_run: 400              # standard 档位推荐值
+  per_day: 2000
