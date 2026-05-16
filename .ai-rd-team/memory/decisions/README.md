@@ -58,3 +58,4 @@ tags: [tech-stack, db, ai]
 | # | 标题 | 状态 |
 |---|---|---|
 | 0001 | 第一阶段技术栈选型与"暂不引入"清单 | Accepted |
+| 0002 | Skills 资产归属与反哺 ai-rd-team 的时机 | Accepted |
