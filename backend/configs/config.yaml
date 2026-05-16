@@ -1,0 +1,78 @@
+# FinVault 后端配置（第一阶段：本地 SQLite + 单 LLM Provider）
+server:
+  host: "0.0.0.0"
+  port: 8080
+  read_timeout: 30s
+  write_timeout: 30s
+  mode: "debug"           # debug/release/test
+
+database:
+  driver: "sqlite"        # sqlite / mysql / postgres
+  dsn: "data/finvault.db"
+  auto_migrate: true
+  log_level: "warn"       # silent/error/warn/info
+  max_idle_conns: 10
+  max_open_conns: 50
+  conn_max_lifetime: 1h
+
+cache:
+  driver: "memory"        # memory / redis
+  redis:
+    addr: "127.0.0.1:6379"
+    password: ""
+    db: 0
+
+# 多 Provider LLM 配置（路由由 default 指定，可被请求参数覆盖）
+llm:
+  default: "deepseek"
+  providers:
+    deepseek:
+      enabled: true
+      api_key: ""
+      base_url: "https://api.deepseek.com/v1"
+      model: "deepseek-chat"
+      timeout: 60s
+    glm:
+      enabled: false
+      api_key: ""
+      base_url: "https://open.bigmodel.cn/api/paas/v4"
+      model: "glm-4-flash"
+      timeout: 60s
+    kimi:
+      enabled: false
+      api_key: ""
+      base_url: "https://api.moonshot.cn/v1"
+      model: "moonshot-v1-8k"
+      timeout: 60s
+    qwen:
+      enabled: false
+      api_key: ""
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      model: "qwen-turbo"
+      timeout: 60s
+    ollama:
+      enabled: false
+      api_key: ""
+      base_url: "http://127.0.0.1:11434/v1"
+      model: "qwen2.5:7b"
+      timeout: 120s
+
+# 行情数据源
+quote:
+  refresh_interval: 5m
+  http_timeout: 10s
+  pool_size: 16
+
+# 定时任务
+cron:
+  mature_scan: "30 0 * * *"   # 每天 00:30 扫描理财到期
+
+# 日志
+log:
+  level: "info"           # debug/info/warn/error
+  format: "text"          # text/json
+
+# JWT（第一阶段未启用认证，先占位）
+jwt:
+  secret: "fin-vault-secret-change-me"
+  expire: 168h

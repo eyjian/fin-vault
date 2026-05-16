@@ -1,0 +1,883 @@
+# FinVault HTTP API 接口契约（M1）
+# 版本: v1.0-impl
+# 出品: 架构师 陈架构
+# 日期: 2026-05-16
+#
+# 约定：
+# - Base URL: http://localhost:8080
+# - 路径前缀: /api/v1
+# - 认证：第一阶段单用户，Header `X-User-Id` 默认 1（无则 bootstrap 注入）
+# - 统一响应：{ code: 0|>0, message: "ok"|"errMsg", data: <object|array|null>, request_id: "..." }
+# - 错误码区间：10000 通用 / 20000 user / 30000 core / 40000 quote / 50000 ai / 90000 系统
+# - 金额/数量：JSON 中以字符串传输（防 JS 浮点丢精度），后端用 shopspring/decimal
+# - 时间：ISO 8601（YYYY-MM-DDTHH:mm:ssZ08:00），日期 YYYY-MM-DD
+# - 分页：?page=1&page_size=20，响应 data.items + data.total
+
+openapi: "3.0.3"
+info:
+  title: FinVault API
+  version: v1.0-impl
+  description: 个人理财管理系统 HTTP API 契约（第一阶段 M1）
+
+servers:
+  - url: http://localhost:8080/api/v1
+
+# ============================================================
+# 通用组件
+# ============================================================
+components:
+  parameters:
+    UserIdHeader:
+      name: X-User-Id
+      in: header
+      required: false
+      schema: { type: integer, default: 1 }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, default: 1, minimum: 1 }
+    PageSize:
+      name: page_size
+      in: query
+      schema: { type: integer, default: 20, minimum: 1, maximum: 200 }
+    OrderBy:
+      name: order_by
+      in: query
+      schema: { type: string, example: "created_at desc" }
+
+  schemas:
+    # ----- 通用 -----
+    Resp:
+      type: object
+      required: [code, message, data, request_id]
+      properties:
+        code: { type: integer, example: 0 }
+        message: { type: string, example: ok }
+        data: {}
+        request_id: { type: string, example: "01J..." }
+
+    Page:
+      type: object
+      properties:
+        items: { type: array, items: {} }
+        total: { type: integer }
+        page: { type: integer }
+        page_size: { type: integer }
+
+    Decimal:
+      type: string
+      description: 金额或数量，字符串传输保精度
+      example: "12345.6789"
+
+    # ----- 资产 / 子类型 -----
+    AssetType:
+      type: string
+      enum: [fund, stock, wealth, cash]
+
+    Asset:
+      type: object
+      required: [user_id, asset_code, name, asset_type, currency, status]
+      properties:
+        id: { type: integer }
+        user_id: { type: integer }
+        asset_code: { type: string, maxLength: 32 }
+        name: { type: string, maxLength: 128 }
+        asset_type: { $ref: "#/components/schemas/AssetType" }
+        currency: { type: string, example: CNY }
+        issuer_platform_id: { type: integer, nullable: true }
+        risk_level: { type: string, enum: [R1, R2, R3, R4, R5], nullable: true }
+        status: { type: string, enum: [active, delisted, matured] }
+        remark: { type: string }
+        fund_detail:    { $ref: "#/components/schemas/FundDetail",   nullable: true }
+        stock_detail:   { $ref: "#/components/schemas/StockDetail",  nullable: true }
+        wealth_detail:  { $ref: "#/components/schemas/WealthDetail", nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    FundDetail:
+      type: object
+      properties:
+        asset_id: { type: integer }
+        fund_type: { type: string, enum: [equity, bond, hybrid, money, index, qdii] }
+        manager: { type: string }
+        company: { type: string }
+        inception_date: { type: string, format: date, nullable: true }
+        latest_nav: { $ref: "#/components/schemas/Decimal" }
+        latest_nav_date: { type: string, format: date, nullable: true }
+        benchmark: { type: string }
+
+    StockDetail:
+      type: object
+      required: [market]
+      properties:
+        asset_id: { type: integer }
+        market: { type: string, enum: [SH, SZ, HK, US, BJ] }
+        industry: { type: string }
+        sector: { type: string }
+        listing_date: { type: string, format: date, nullable: true }
+        total_shares: { $ref: "#/components/schemas/Decimal" }
+        latest_price: { $ref: "#/components/schemas/Decimal" }
+        latest_price_time: { type: string, format: date-time, nullable: true }
+
+    WealthDetail:
+      type: object
+      required: [product_type]
+      properties:
+        asset_id: { type: integer }
+        product_type: { type: string, enum: [fixed_deposit, structured, floating, pension] }
+        expected_yield: { $ref: "#/components/schemas/Decimal" }
+        actual_yield: { $ref: "#/components/schemas/Decimal" }
+        start_date: { type: string, format: date, nullable: true }
+        end_date: { type: string, format: date, nullable: true }
+        term_days: { type: integer }
+        min_amount: { $ref: "#/components/schemas/Decimal" }
+        redemption_rule: { type: string }
+        is_auto_renewal: { type: boolean }
+
+    # ----- 持仓 -----
+    Holding:
+      type: object
+      properties:
+        id: { type: integer }
+        user_id: { type: integer }
+        asset_id: { type: integer }
+        platform_id: { type: integer }
+        portfolio_id: { type: integer, nullable: true }
+        quantity: { $ref: "#/components/schemas/Decimal" }
+        avg_cost: { $ref: "#/components/schemas/Decimal" }
+        total_cost: { $ref: "#/components/schemas/Decimal" }
+        realized_pnl: { $ref: "#/components/schemas/Decimal" }
+        total_dividend: { $ref: "#/components/schemas/Decimal" }
+        cost_method: { type: string, enum: [weighted_avg, fifo] }
+        status: { type: string, enum: [holding, closed, matured] }
+        first_buy_at: { type: string, format: date-time, nullable: true }
+        last_txn_at: { type: string, format: date-time, nullable: true }
+        asset: { $ref: "#/components/schemas/Asset" }
+
+    HoldingView:
+      allOf:
+        - $ref: "#/components/schemas/Holding"
+        - type: object
+          properties:
+            latest_price: { $ref: "#/components/schemas/Decimal" }
+            market_value: { $ref: "#/components/schemas/Decimal" }
+            unrealized_pnl: { $ref: "#/components/schemas/Decimal" }
+            total_pnl: { $ref: "#/components/schemas/Decimal" }
+            pnl_ratio: { $ref: "#/components/schemas/Decimal" }
+            market_value_cny: { $ref: "#/components/schemas/Decimal" }
+
+    HoldingSummary:
+      type: object
+      properties:
+        display_currency: { type: string, example: CNY }
+        total_market_value: { $ref: "#/components/schemas/Decimal" }
+        total_cost: { $ref: "#/components/schemas/Decimal" }
+        total_pnl: { $ref: "#/components/schemas/Decimal" }
+        pnl_ratio: { $ref: "#/components/schemas/Decimal" }
+        by_type:
+          type: array
+          items:
+            type: object
+            properties:
+              asset_type: { $ref: "#/components/schemas/AssetType" }
+              market_value: { $ref: "#/components/schemas/Decimal" }
+              ratio: { $ref: "#/components/schemas/Decimal" }
+        by_platform:
+          type: array
+          items:
+            type: object
+            properties:
+              platform_id: { type: integer }
+              platform_name: { type: string }
+              market_value: { $ref: "#/components/schemas/Decimal" }
+              ratio: { $ref: "#/components/schemas/Decimal" }
+        by_currency:
+          type: array
+          items:
+            type: object
+            properties:
+              currency: { type: string }
+              market_value: { $ref: "#/components/schemas/Decimal" }
+              ratio: { $ref: "#/components/schemas/Decimal" }
+
+    # ----- 交易 -----
+    TxnType:
+      type: string
+      enum:
+        - buy
+        - sell
+        - dividend
+        - dividend_reinvest
+        - split
+        - bonus
+        - mature
+        - interest
+        - deposit
+        - withdraw
+        - cash_in
+        - cash_out
+        - adjust
+
+    Transaction:
+      type: object
+      required: [holding_id, txn_type, txn_time, quantity, price, amount, currency]
+      properties:
+        id: { type: integer }
+        user_id: { type: integer }
+        holding_id: { type: integer }
+        asset_id: { type: integer }
+        platform_id: { type: integer }
+        txn_type: { $ref: "#/components/schemas/TxnType" }
+        txn_time: { type: string, format: date-time }
+        quantity: { $ref: "#/components/schemas/Decimal" }
+        price: { $ref: "#/components/schemas/Decimal" }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        fee: { $ref: "#/components/schemas/Decimal" }
+        tax: { $ref: "#/components/schemas/Decimal" }
+        net_amount: { $ref: "#/components/schemas/Decimal" }
+        currency: { type: string, example: CNY }
+        source: { type: string, enum: [manual, import, auto_mature], default: manual }
+        external_id: { type: string }
+        note: { type: string }
+        created_at: { type: string, format: date-time }
+
+    # ----- 行情 / 汇率 -----
+    PriceQuote:
+      type: object
+      properties:
+        id: { type: integer }
+        asset_id: { type: integer }
+        price: { $ref: "#/components/schemas/Decimal" }
+        quote_time: { type: string, format: date-time }
+        change_pct: { $ref: "#/components/schemas/Decimal" }
+        volume: { $ref: "#/components/schemas/Decimal" }
+        source: { type: string, enum: [manual, api_sina, api_tencent, api_eastmoney] }
+
+    ExchangeRate:
+      type: object
+      properties:
+        id: { type: integer }
+        from_currency: { type: string }
+        to_currency: { type: string }
+        rate: { $ref: "#/components/schemas/Decimal" }
+        quote_date: { type: string, format: date }
+        source: { type: string, enum: [manual, pboc, api] }
+
+    # ----- AI -----
+    AIScene:
+      type: string
+      enum: [chat, buy_sell, analysis, report]
+
+    AIConversation:
+      type: object
+      properties:
+        id: { type: integer }
+        user_id: { type: integer }
+        title: { type: string }
+        scene: { $ref: "#/components/schemas/AIScene" }
+        llm_provider: { type: string, example: deepseek }
+        llm_model: { type: string }
+        message_count: { type: integer }
+        total_tokens: { type: integer }
+        status: { type: string, enum: [active, archived, deleted] }
+        created_at: { type: string, format: date-time }
+
+    AIMessage:
+      type: object
+      properties:
+        id: { type: integer }
+        conversation_id: { type: integer }
+        role: { type: string, enum: [system, user, assistant, tool] }
+        content: { type: string }
+        tool_name: { type: string }
+        tool_args: { type: string }
+        tool_result: { type: string }
+        token_count: { type: integer }
+        created_at: { type: string, format: date-time }
+
+    Platform:
+      type: object
+      properties:
+        id: { type: integer }
+        code: { type: string }
+        name: { type: string }
+        platform_type: { type: string, enum: [bank, fund_platform, broker, internet] }
+        icon_url: { type: string }
+        status: { type: string }
+
+# ============================================================
+# 路径
+# ============================================================
+paths:
+
+  # ----- Meta -----
+  /healthz:
+    get:
+      summary: 健康检查
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  version: { type: string }
+                  time: { type: string, format: date-time }
+
+  /platforms:
+    get:
+      summary: 平台字典
+      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Resp"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Platform" }
+
+  # ============================================================
+  # 资产（基金 / 股票 / 理财 / 现金 统一一套 CRUD，传 asset_type 区分）
+  # ============================================================
+  /assets:
+    get:
+      summary: 资产列表（按类型筛选）
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize"}
+        - name: asset_type
+          in: query
+          schema: { $ref: "#/components/schemas/AssetType" }
+        - name: keyword
+          in: query
+          schema: { type: string, description: "按 code/name 模糊搜索" }
+        - name: status
+          in: query
+          schema: { type: string, enum: [active, delisted, matured] }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Resp"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Page" }
+    post:
+      summary: 创建资产（含子类型 detail，单一接口完成）
+      description: |
+        请求体根据 asset_type 自动选择 detail 字段：
+        - asset_type=fund   → 必填 fund_detail
+        - asset_type=stock  → 必填 stock_detail
+        - asset_type=wealth → 必填 wealth_detail
+        - asset_type=cash   → 不需要 detail，asset_code 必须为 `CASH-{platform}-{currency}`
+      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Asset" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Resp"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Asset" }
+
+  /assets/{id}:
+    get:
+      summary: 资产详情
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Resp"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Asset" }
+    put:
+      summary: 更新资产（含 detail）
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Asset" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+    delete:
+      summary: 软删资产（仅在无持仓时允许）
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+
+  # ----- 子类型快捷接口（前端按业务页面调用，更直观）-----
+  /assets/funds:
+    get:
+      summary: 基金列表（语法糖：等价 /assets?asset_type=fund）
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize"}
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+  /assets/stocks:
+    get:
+      summary: 股票列表（语法糖：等价 /assets?asset_type=stock）
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize"}
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+  /assets/wealth:
+    get:
+      summary: 理财产品列表（语法糖：等价 /assets?asset_type=wealth）
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize"}
+        - name: maturing_within_days
+          in: query
+          schema: { type: integer, description: "即将到期天数过滤" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+  /assets/cash:
+    get:
+      summary: 现金账户列表（语法糖：等价 /assets?asset_type=cash）
+      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+
+  # ============================================================
+  # 持仓
+  # ============================================================
+  /holdings:
+    get:
+      summary: 持仓列表（含计算字段）
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize"}
+        - { name: asset_type, in: query, schema: { $ref: "#/components/schemas/AssetType" } }
+        - { name: platform_id, in: query, schema: { type: integer } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: display_currency, in: query, schema: { type: string, enum: [raw, CNY], default: CNY } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Resp"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items: { $ref: "#/components/schemas/HoldingView" }
+                          total: { type: integer }
+
+  /holdings/summary:
+    get:
+      summary: 持仓总览（按类型 / 平台 / 币种聚合）
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - { name: display_currency, in: query, schema: { type: string, enum: [raw, CNY], default: CNY } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Resp"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HoldingSummary" }
+
+  /holdings/{id}:
+    get:
+      summary: 持仓详情
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+    patch:
+      summary: 修改 cost_method（weighted_avg ↔ fifo）
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cost_method: { type: string, enum: [weighted_avg, fifo] }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+
+  # ============================================================
+  # 交易
+  # ============================================================
+  /transactions:
+    get:
+      summary: 交易流水查询
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize"}
+        - { name: holding_id, in: query, schema: { type: integer } }
+        - { name: asset_id, in: query, schema: { type: integer } }
+        - { name: platform_id, in: query, schema: { type: integer } }
+        - { name: txn_type, in: query, schema: { $ref: "#/components/schemas/TxnType" } }
+        - { name: start, in: query, schema: { type: string, format: date } }
+        - { name: end,   in: query, schema: { type: string, format: date } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+    post:
+      summary: 录入交易（含 buy/sell/dividend/mature 等 13 种类型）
+      description: |
+        统一接口：
+        - 必填 user_id (Header) / holding_id 或 (asset_id+platform_id) / txn_type / txn_time / quantity / price / amount
+        - net_amount 由后端按规则计算（buy: amount+fee+tax；sell: amount-fee-tax）
+        - 同 (user_id, platform_id, external_id) 防重
+      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Transaction" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+
+  /transactions/{id}:
+    get:
+      summary: 交易详情
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+    delete:
+      summary: 删除交易（同步回滚 Holding）
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+
+  /transactions/import:
+    post:
+      summary: CSV 批量导入
+      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                platform_id: { type: integer }
+                dry_run: { type: boolean, default: false }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Resp"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          total: { type: integer }
+                          succeeded: { type: integer }
+                          skipped: { type: integer }
+                          failed: { type: integer }
+                          errors:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                row: { type: integer }
+                                message: { type: string }
+
+  # ============================================================
+  # 行情
+  # ============================================================
+  /quotes/latest:
+    get:
+      summary: 批量获取最新行情
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - { name: asset_ids, in: query, required: true, schema: { type: string, description: "逗号分隔" } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+
+  /quotes/refresh:
+    post:
+      summary: 主动刷新行情（按 asset_id 列表，从 source_priority 拉取）
+      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                asset_ids:
+                  type: array
+                  items: { type: integer }
+                source:
+                  type: string
+                  enum: [auto, eastmoney, sina, tencent]
+                  default: auto
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+
+  /quotes:
+    post:
+      summary: 手动写入行情（用户 source=manual）
+      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PriceQuote" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+
+  # ============================================================
+  # 汇率
+  # ============================================================
+  /rates:
+    get:
+      summary: 汇率查询
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - { name: from, in: query, required: true, schema: { type: string } }
+        - { name: to, in: query, required: true, schema: { type: string } }
+        - { name: as_of, in: query, schema: { type: string, format: date } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+    post:
+      summary: 录入/更新汇率
+      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ExchangeRate" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+
+  # ============================================================
+  # AI 对话
+  # ============================================================
+  /ai/providers:
+    get:
+      summary: 已配置的 LLM Provider 列表
+      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Resp"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            name: { type: string, example: deepseek }
+                            model: { type: string, example: deepseek-chat }
+                            is_default: { type: boolean }
+
+  /ai/conversations:
+    get:
+      summary: 我的会话列表
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - {$ref: "#/components/parameters/Page"}
+        - {$ref: "#/components/parameters/PageSize"}
+        - { name: scene, in: query, schema: { $ref: "#/components/schemas/AIScene" } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+    post:
+      summary: 新建会话
+      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scene]
+              properties:
+                title: { type: string }
+                scene: { $ref: "#/components/schemas/AIScene" }
+                llm_provider: { type: string, description: "可空，默认走 cfg.llm.default" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+
+  /ai/conversations/{id}/messages:
+    get:
+      summary: 拉取历史消息
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+
+  /ai/chat/stream:
+    post:
+      summary: 流式对话（SSE）
+      description: |
+        请求体含 conversation_id（可空，第一次自动创建）、scene、user 消息。
+        响应 Content-Type: text/event-stream
+        每条 event:
+          ```
+          data: {"type":"chunk","content":"...","done":false}
+          data: {"type":"tool_call","name":"holding_query","args":"..."}
+          data: {"type":"done","conversation_id":123,"usage":{...}}
+          ```
+      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scene, content]
+              properties:
+                conversation_id: { type: integer, nullable: true }
+                scene: { $ref: "#/components/schemas/AIScene" }
+                content: { type: string }
+                llm_provider: { type: string, nullable: true, description: "可覆盖会话级别 provider" }
+      responses:
+        "200":
+          description: SSE 流
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /ai/advisor/recommend:
+    post:
+      summary: 一次性买卖/持仓建议（含 Tool Calling 循环，非流式）
+      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target]
+              properties:
+                target: { type: string, enum: [buy_sell, allocation], description: "建议类型" }
+                asset_id: { type: integer, nullable: true }
+                llm_provider: { type: string, nullable: true }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+
+  /ai/analysis/profit:
+    post:
+      summary: 盈亏分析（Tool Calling 循环）
+      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                period: { type: string, example: "2026-Q1" }
+                display_currency: { type: string, default: CNY }
+                llm_provider: { type: string, nullable: true }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+
+  # ============================================================
+  # 导出
+  # ============================================================
+  /export:
+    get:
+      summary: 数据导出（Excel / Markdown）
+      parameters:
+        - {$ref: "#/components/parameters/UserIdHeader"}
+        - { name: format, in: query, required: true, schema: { type: string, enum: [xlsx, md] } }
+        - { name: scope,  in: query, required: true, schema: { type: string, enum: [holdings, transactions, full] } }
+        - { name: start, in: query, schema: { type: string, format: date } }
+        - { name: end,   in: query, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: 文件流
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+
+# ============================================================
+# 错误码
+# ============================================================
+x-error-codes:
+  "0":      OK
+  "10001":  INVALID_PARAM        # 通用参数错误
+  "10002":  NOT_FOUND
+  "10003":  CONFLICT
+  "10004":  PERMISSION_DENIED
+  "20001":  USER_NOT_FOUND
+  "30001":  ASSET_NOT_FOUND
+  "30002":  HOLDING_NOT_FOUND
+  "30003":  INSUFFICIENT_QUANTITY      # 卖出量超过持仓
+  "30004":  DUPLICATE_TRANSACTION       # external_id 防重
+  "30005":  INVALID_CASH_CODE           # 现金 code 格式不符
+  "30006":  MISSING_WEALTH_DETAIL       # 理财必须 wealth_detail
+  "40001":  QUOTE_FETCH_FAILED          # 第三方行情接口失败
+  "40002":  MISSING_EXCHANGE_RATE       # 折算时无可用汇率
+  "50001":  LLM_PROVIDER_NOT_FOUND
+  "50002":  LLM_TOOL_HOPS_EXCEEDED      # Tool 循环超上限
+  "50003":  LLM_UPSTREAM_ERROR
+  "90001":  INTERNAL_ERROR              # panic 兜底
+  "90002":  DB_ERROR
+  "90003":  CRON_ERROR

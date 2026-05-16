@@ -1,0 +1,53 @@
+/* FinVault 全局样式（最简版本，给页面留呼吸感） */
+:root {
+  --fv-bg: #f5f7fa;
+  --fv-text: #303133;
+  --fv-text-muted: #909399;
+  --fv-border: #ebeef5;
+  --fv-success: #67c23a;
+  --fv-warning: #e6a23c;
+  --fv-danger: #f56c6c;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  color: var(--fv-text);
+  background: var(--fv-bg);
+}
+
+#app {
+  height: 100%;
+}
+
+.fv-page {
+  padding: 16px;
+}
+
+.fv-card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.fv-flex {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fv-grow {
+  flex: 1;
+}
+
+.fv-pnl-up {
+  color: var(--fv-danger);
+}
+.fv-pnl-down {
+  color: var(--fv-success);
+}
