@@ -1,3 +1,7 @@
 .codebuddy
 .trae
 .claude
+
+# iWiki plugin files
+.iwiki
+.vscode/iwiki-*.json
