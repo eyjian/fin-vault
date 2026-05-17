@@ -356,6 +356,66 @@ ctxKey 类型 unexported 防止其它包伪造 key 绕过隔离；只通过 `Wit
 
 - 引入 AI 路由独有的认证风格 —— 可控：通过 helper 命名（`require*`）即可表明强校验意图；future 二阶段 JWT 全面切换后两种 helper 行为对齐
 
+### D16：LLM 不可用降级策略（AISession 装、AIMessage 不装）
+
+**背景**：
+
+- `model.NewDefaultModel` 在以下场景返非 nil error（factory 已实装的边界）：
+  - `cfg.LLM.Providers` 全空（用户未配 API key）
+  - 所有 provider Enabled=false
+  - 所有 provider 配置不全（APIKey/BaseURL/Model 缺一）
+- §9 wire 装配时若不处理该 error，整个进程将退出 —— 但 AI 不是核心功能，启动用户即使没配 LLM 也能正常使用 asset / holding / transaction
+- AIMeta handler 已有降级先例（`cfg.LLM.Providers` 空时 `/api/v1/ai/providers` 返回空数组），需要扩展到 AISession / AIMessage
+
+**规则**：
+
+1. **正常路径**：`model.NewDefaultModel` 返回 (sdkModel, providerName, nil) → 装配 7 工具 → factory → Runner → AIMessageService → AIMessageHandler；handlers.AIMessage 非 nil
+2. **降级路径**：`model.NewDefaultModel` 返 error → handlers.AIMessage 保持 nil（POST `/ai/sessions/:id/messages` 自动 404，因 router 条件挂载）；同时 slog.Warn 含降级原因（error.Error()）
+3. **AISession 始终装**：CRUD 路径只依赖 SessionStore，不依赖 Runner；用户即便没配 LLM 也能列出已有会话、删除会话等
+4. **AIMeta 不变**：与现状一致（`/ai/providers` 返回空数组或已配 provider 列表）
+5. **降级日志可见**：启动日志至少含 `slog.Warn("AI message endpoint disabled", "reason", err)`，运维看启动日志能立即明白原因
+
+**理由**：
+
+- AI 与核心业务解耦：AI 不可用不应影响主流程的 asset/holding/transaction 路由
+- 降级语义可观察：用户 GET `/ai/sessions` 仍能拿到自己的历史会话；POST `/ai/sessions/:id/messages` 返 404 表示该端点不可用
+- 与现有先例一致：AIMeta 在 cfg.LLM 空时返空数组，沿用同一降级哲学
+- 启动日志可追溯：运维可见的 reason 字段是降级根因（无 API key / provider disabled / config 不全）
+
+**备选**：
+
+- 进程退出 fatal（被否：与 wire 其他失败一致，但 AI 不是核心功能，硬退过严）
+- AISession + AIMessage 都不装（被否：AISession 不依赖 Runner，CRUD 应能独立工作）
+
+**风险**：
+
+- 用户难以察觉 POST send 失败原因（可能误以为是会话问题）—— 缓解：handler 层未来可加诊断端点 `/ai/health` 暴露 Runner 装配状态；本期靠启动日志兜底
+
+### D17：§9.3 in-flight step flush 评估（无需实装）
+
+**背景**：
+
+- tasks.md 早期版本要求"§9.3 增加优雅关闭：进程退出前 flush in-flight step"
+- 实际 §5 实装时 `appendStepSafe` 是**同步**落库（每个 step 调一次 `store.AppendStep`），无内部缓冲
+- 因此严格意义上没有"in-flight step"需要 flush —— 早期 tasks 描述与实际实现存在历史漂移
+
+**规则**：
+
+1. **本期不实装** flush 接口或方法
+2. **commit body + design.md 必须解释**：当前 step 写入是同步路径，无需缓冲冲刷
+3. **HTTP server 10s graceful shutdown 保留**（main.go L72-82 已有），用于让正在执行的 Run() 完成最后一次 step 写入
+4. **如未来 Runner 引入异步 step 缓冲**（性能优化）：再补 `Runner.Flush(ctx) error` 接口 + `App.Close()` 调用 → 留 §10 follow-up 提案
+
+**理由**：
+
+- 不增加无价值代码：当前同步路径下加 Flush stub 反而误导后续开发
+- 文档显式记录：避免 tester / reviewer 误判"§9.3 未实装"
+- HTTP graceful shutdown 已经覆盖大部分场景（10s 内剩余 Run 调用能完成同步 AppendStep）
+
+**风险**：
+
+- 未来异步缓冲引入时容易遗漏 Flush 实装 —— 缓解：本 D17 段已明确"如未来 Runner 引入异步 step 缓冲再补"作为 redirect 锚点
+
 | 风险 | 缓解 |
 |---|---|
 | trpc-agent-go API 在 v1.x 微调导致升级痛 | 在 `agent` 包内严格隔离，业务层只看 `Runner` 接口 |

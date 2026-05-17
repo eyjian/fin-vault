@@ -96,9 +96,18 @@
 
 ## 9. Bootstrap & 装配
 
-- [ ] 9.1 在 `internal/bootstrap/` 装配：构造单例 Runner，注入 SessionService / MessageService
-- [ ] 9.2 启动日志列出：默认 Provider、可用 Provider 列表、已注册工具清单、清理阈值
-- [ ] 9.3 增加优雅关闭：进程退出前 flush in-flight step
+- [ ] 9.1 在 `internal/bootstrap/` 装配单例 SessionStore + Runner + AISessionService + AIMessageService → 接入 wire.go：
+  - 9.1a 新建 `bootstrap/wire_ai.go`：`buildAITools(repos)` 聚合 7 工具（search_fund / market_quote / market_data / holding_query / profit_calc / platform_summary / history_query）+ `wireAI(...)` 完成完整装配链
+  - 9.1b 改 `bootstrap/wire.go` 移除 §8 placeholder（L125-141 段），调用 wireAI 装配 `handlers.AISession` / `handlers.AIMessage`
+  - 9.1c **D16 LLM 不可用降级**（详见 design.md D16）：`model.NewDefaultModel` 返 error 时 → AISession 仍装（CRUD 不依赖 Runner）+ AIMessage 保持 nil（POST send 自动 404）+ slog.Warn 含降级原因；与现有 "no llm providers configured" 告警对齐
+  - 9.1d default instruction 本期硬编码（"你是 fin-vault 个人理财助手，回答必须基于工具返回的真实数据，不臆测。"）；后续可加 `cfg.AI.Instruction` 覆盖（留 §10 follow-up）
+- [ ] 9.2 启动日志补齐（spec ai-agent-runtime "工具清单启动可见"）：
+  - 9.2a `llm provider selected (default)` 或 fallback 日志（**已在 model.NewDefaultModel 实装**）
+  - 9.2b `llm tools registered` 日志（**已在 NewToolsetAgentFactory 实装**：tools[] / count / max_tool_iterations / app_name）
+  - 9.2c **新增** `ai providers loaded` 日志（wireAI 装配前打）：configured 名单 / default
+  - 9.2d **新增** `ai session config` 日志（wireAI 完成后打）：history_window / max_steps_size_mb
+  - 9.2e **新增** `ai endpoints status` 日志（wireAI 完成后打）：session_enabled / message_enabled，降级时含 reason
+- [ ] 9.3 评估 in-flight step flush：当前 `appendStepSafe` 同步落库无内部缓冲（§5 实装时已绕过），严格意义无 in-flight step 需要 flush；本期**不实装** flush 接口，commit body + design.md 备注解释；HTTP server 10s graceful shutdown（main.go 已有）保留不变；如未来 Runner 引入异步 step 缓冲再补——留 §10 follow-up
 
 ## 10. 验收 & 收尾
 
