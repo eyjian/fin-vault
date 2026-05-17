@@ -26,15 +26,20 @@ import (
 // AppendMessage / AppendStep 在本期 service 层不直接调用（业务 Runner 内部用），
 // 但需满足接口编译期断言，所以提供最小实现。
 type fakeAISessionStore struct {
-	mu       sync.Mutex
-	sessions map[string]*domain.Session
+	mu        sync.Mutex
+	sessions  map[string]*domain.Session
+	messages  []domain.Message
 	createErr error
 	updateErr error
 	deleteErr error
+	listMsgErr error
 }
 
 func newFakeAISessionStore() *fakeAISessionStore {
-	return &fakeAISessionStore{sessions: make(map[string]*domain.Session)}
+	return &fakeAISessionStore{
+		sessions: make(map[string]*domain.Session),
+		messages: []domain.Message{},
+	}
 }
 
 func (f *fakeAISessionStore) CreateSession(_ context.Context, s *domain.Session) error {
@@ -98,10 +103,26 @@ func (f *fakeAISessionStore) ListSessions(_ context.Context, opts session.ListSe
 	return out, int64(len(out)), nil
 }
 
-func (f *fakeAISessionStore) ListMessages(_ context.Context, _ string, _ int) ([]domain.Message, error) {
-	return nil, nil
+func (f *fakeAISessionStore) ListMessages(_ context.Context, sessionID string, _ int) ([]domain.Message, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.listMsgErr != nil {
+		return nil, f.listMsgErr
+	}
+	out := []domain.Message{}
+	for _, m := range f.messages {
+		if m.SessionID == sessionID {
+			out = append(out, m)
+		}
+	}
+	return out, nil
 }
-func (f *fakeAISessionStore) AppendMessage(_ context.Context, _ *domain.Message) error { return nil }
+func (f *fakeAISessionStore) AppendMessage(_ context.Context, m *domain.Message) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.messages = append(f.messages, *m)
+	return nil
+}
 func (f *fakeAISessionStore) AppendStep(_ context.Context, _ *domain.AgentStep) error  { return nil }
 func (f *fakeAISessionStore) EstimateStepsSize(_ context.Context) (int64, error)        { return 0, nil }
 
@@ -364,4 +385,170 @@ func TestAIMessageService_Send_PropagatesRunnerError(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, errs.ErrAIProviderRateLimited),
 		"Runner 返回的业务错误必须透传，service 不重新映射")
+}
+
+// =====================================================================
+// §7.5 覆盖率补齐：Get / Delete / List / ListMessages 完整路径
+// =====================================================================
+
+// TestAISessionService_Get_Success
+//
+// 自己的 session 应正常返回完整字段。
+func TestAISessionService_Get_Success(t *testing.T) {
+	store := newFakeAISessionStore()
+	svc := NewAISessionService(store)
+	sess, err := svc.Create(context.Background(), 7, "my-sess")
+	require.NoError(t, err)
+
+	got, err := svc.Get(context.Background(), 7, sess.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, sess.ID, got.ID)
+	assert.Equal(t, uint(7), got.UserID)
+	assert.Equal(t, "my-sess", got.Title)
+}
+
+// TestAISessionService_Get_NotFound
+//
+// sessionID 不存在 → ErrAISessionNotFound（覆盖 store 层 not found 路径，
+// 区别于 OtherUser 用例覆盖归属比对路径）。
+func TestAISessionService_Get_NotFound(t *testing.T) {
+	store := newFakeAISessionStore()
+	svc := NewAISessionService(store)
+
+	_, err := svc.Get(context.Background(), 1, "no-such-id")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound)
+
+	// 空 sessionID 也走 ErrAISessionNotFound
+	_, err = svc.Get(context.Background(), 1, "")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound)
+
+	// userID=0 走 ErrInvalidParam（覆盖入参校验分支）
+	_, err = svc.Get(context.Background(), 0, "any")
+	require.Error(t, err)
+	got := errs.As(err)
+	require.NotNil(t, got)
+	assert.Equal(t, errs.ErrInvalidParam.Code, got.Code)
+}
+
+// TestAISessionService_Delete_Success
+//
+// 自己的 session 应被正常删除，删除后再 Get 应返 ErrAISessionNotFound。
+func TestAISessionService_Delete_Success(t *testing.T) {
+	store := newFakeAISessionStore()
+	svc := NewAISessionService(store)
+	sess, err := svc.Create(context.Background(), 1, "del-me")
+	require.NoError(t, err)
+
+	require.NoError(t, svc.Delete(context.Background(), 1, sess.ID))
+
+	_, err = svc.Get(context.Background(), 1, sess.ID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound, "Delete 后 session 不应可查")
+}
+
+// TestAISessionService_Delete_NotFound
+//
+// sessionID 不存在 → ErrAISessionNotFound（不暴露存在性，等同跨用户 404 语义）。
+func TestAISessionService_Delete_NotFound(t *testing.T) {
+	store := newFakeAISessionStore()
+	svc := NewAISessionService(store)
+
+	err := svc.Delete(context.Background(), 1, "ghost-id")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound)
+}
+
+// TestAISessionService_List_Empty
+//
+// 用户无任何 session → 返回空列表 + total=0，不应 error。
+func TestAISessionService_List_Empty(t *testing.T) {
+	store := newFakeAISessionStore()
+	svc := NewAISessionService(store)
+
+	list, total, err := svc.List(context.Background(), SessionListInput{UserID: 99})
+	require.NoError(t, err)
+	assert.EqualValues(t, 0, total)
+	assert.Empty(t, list)
+
+	// userID=0 走 ErrInvalidParam（覆盖入参校验分支）
+	_, _, err = svc.List(context.Background(), SessionListInput{UserID: 0})
+	require.Error(t, err)
+	got := errs.As(err)
+	require.NotNil(t, got)
+	assert.Equal(t, errs.ErrInvalidParam.Code, got.Code)
+}
+
+// TestAISessionService_ListMessages_Success
+//
+// 列出某 session 的 messages（含归属校验前置：sessionID 必须属于 userID）。
+func TestAISessionService_ListMessages_Success(t *testing.T) {
+	store := newFakeAISessionStore()
+	svc := NewAISessionService(store)
+	sess, err := svc.Create(context.Background(), 1, "with-msgs")
+	require.NoError(t, err)
+
+	// 通过 store 直接灌两条消息（service 不暴露 AppendMessage）
+	now := time.Now()
+	require.NoError(t, store.AppendMessage(context.Background(), &domain.Message{
+		ID: uuid.NewString(), SessionID: sess.ID, Role: "user", Content: "hi", CreatedAt: now,
+	}))
+	require.NoError(t, store.AppendMessage(context.Background(), &domain.Message{
+		ID: uuid.NewString(), SessionID: sess.ID, Role: "assistant", Content: "hello", CreatedAt: now.Add(time.Second),
+	}))
+
+	msgs, err := svc.ListMessages(context.Background(), 1, sess.ID, 0)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "hi", msgs[0].Content)
+	assert.Equal(t, "hello", msgs[1].Content)
+}
+
+// TestAISessionService_ListMessages_OtherUser_Returns404
+//
+// 隔离红线第 5 个用例（架构师明确 ListMessages 也是读路径必须隔离）：
+// 跨用户 ListMessages → ErrAISessionNotFound（404 不暴露存在性，绝不返 403）。
+func TestAISessionService_ListMessages_OtherUser_Returns404(t *testing.T) {
+	store := newFakeAISessionStore()
+	svc := NewAISessionService(store)
+	sessA, err := svc.Create(context.Background(), 1, "a")
+	require.NoError(t, err)
+	require.NoError(t, store.AppendMessage(context.Background(), &domain.Message{
+		ID: uuid.NewString(), SessionID: sessA.ID, Role: "user", Content: "secret", CreatedAt: time.Now(),
+	}))
+
+	// 用户 2 试图读用户 1 session 的 messages
+	msgs, err := svc.ListMessages(context.Background(), 2, sessA.ID, 0)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound,
+		"跨用户 ListMessages 必须返 404 ErrAISessionNotFound（D2 安全边界，绝不返 403）")
+	assert.Nil(t, msgs, "失败时不应返回任何消息（防数据泄漏）")
+}
+
+// TestAISessionService_ListMessages_NotFound
+//
+// sessionID 不存在 → ErrAISessionNotFound（归属校验失败前置返回）。
+func TestAISessionService_ListMessages_NotFound(t *testing.T) {
+	store := newFakeAISessionStore()
+	svc := NewAISessionService(store)
+
+	_, err := svc.ListMessages(context.Background(), 1, "ghost-id", 0)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound)
+}
+
+// TestAISessionService_ListMessages_Empty
+//
+// session 存在但无消息 → 返回空切片 + 不 error。
+func TestAISessionService_ListMessages_Empty(t *testing.T) {
+	store := newFakeAISessionStore()
+	svc := NewAISessionService(store)
+	sess, err := svc.Create(context.Background(), 1, "empty")
+	require.NoError(t, err)
+
+	msgs, err := svc.ListMessages(context.Background(), 1, sess.ID, 0)
+	require.NoError(t, err)
+	assert.Empty(t, msgs)
 }
