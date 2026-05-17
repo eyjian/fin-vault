@@ -4,16 +4,15 @@
 //   - 列表：代码 / 名称 / 市场 / 行业 / 板块 / 最新价 / 涨跌幅 / 平台 / 币种 / 操作
 //   - 流水：覆盖 5 种类型 buy/sell/dividend/split/bonus
 
-import { ref, reactive, onMounted, computed } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Plus, Edit, Delete, Money } from '@element-plus/icons-vue'
 import { assetApi } from '@/api/asset'
 import { quoteApi } from '@/api/quote'
-import { usePlatformStore } from '@/stores/platform'
 import type { Asset, StockDetail } from '@/api/types'
 import MoneyInput from '@/components/MoneyInput.vue'
 import TxnDialog from '@/components/TxnDialog.vue'
-import { fmtPercent, pnlColor } from '@/utils/decimal'
+import { usePlatformStore } from '@/stores/platform'
+import { Delete, Edit, Money, Plus, Refresh } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, onMounted, reactive, ref } from 'vue'
 
 const platformStore = usePlatformStore()
 
@@ -79,6 +78,20 @@ function openEdit(a: Asset) {
   formVisible.value = true
 }
 
+function sanitizePayload(a: Asset): Asset {
+  const p: any = JSON.parse(JSON.stringify(a))
+  if (p.stock_detail) {
+    const sd = p.stock_detail
+    if (sd.latest_price === '' || sd.latest_price == null) delete sd.latest_price
+    if (sd.total_shares === '' || sd.total_shares == null) delete sd.total_shares
+    if (!sd.listing_date) delete sd.listing_date
+    if (!sd.latest_price_time) delete sd.latest_price_time
+  }
+  if (p.issuer_platform_id == null) delete p.issuer_platform_id
+  if (!p.risk_level) delete p.risk_level
+  return p as Asset
+}
+
 async function submitForm() {
   if (!form.value.asset_code || !form.value.name) {
     ElMessage.warning('代码与名称必填')
@@ -89,11 +102,12 @@ async function submitForm() {
     return
   }
   try {
+    const payload = sanitizePayload(form.value)
     if (isEdit.value && form.value.id) {
-      await assetApi.update(form.value.id, form.value)
+      await assetApi.update(form.value.id, payload)
       ElMessage.success('更新成功')
     } else {
-      await assetApi.create(form.value)
+      await assetApi.create(payload)
       ElMessage.success('新增成功')
     }
     formVisible.value = false

@@ -5,7 +5,7 @@
 import { computed } from 'vue'
 
 interface Props {
-  modelValue: string
+  modelValue?: string
   placeholder?: string
   disabled?: boolean
   precision?: number // 显示小数位（仅 blur 时格式化），不限制输入
@@ -14,6 +14,7 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  modelValue: '',
   placeholder: '0.00',
   disabled: false,
   precision: 0,

@@ -1,4 +1,5 @@
-import { get, post, put, del, PageResp } from './http'
+import { get, post, put, del } from './http'
+import type { PageResp } from './http'
 import type { Asset, AssetType } from './types'
 
 export interface AssetListParams {
@@ -15,16 +16,16 @@ export const assetApi = {
     return get<PageResp<Asset>>('/assets', params)
   },
   funds(params: AssetListParams = {}) {
-    return get<PageResp<Asset>>('/assets/funds', params)
+    return get<PageResp<Asset>>('/assets', { ...params, asset_type: 'fund' })
   },
   stocks(params: AssetListParams = {}) {
-    return get<PageResp<Asset>>('/assets/stocks', params)
+    return get<PageResp<Asset>>('/assets', { ...params, asset_type: 'stock' })
   },
   wealth(params: AssetListParams = {}) {
-    return get<PageResp<Asset>>('/assets/wealth', params)
+    return get<PageResp<Asset>>('/assets', { ...params, asset_type: 'wealth' })
   },
   cash(params: AssetListParams = {}) {
-    return get<PageResp<Asset>>('/assets/cash', params)
+    return get<PageResp<Asset>>('/assets', { ...params, asset_type: 'cash' })
   },
   get(id: number) {
     return get<Asset>(`/assets/${id}`)

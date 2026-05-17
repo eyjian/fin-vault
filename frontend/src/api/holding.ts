@@ -1,4 +1,5 @@
-import { get, patch, PageResp } from './http'
+import { get, patch } from './http'
+import type { PageResp } from './http'
 import type { HoldingView, HoldingSummary, AssetType } from './types'
 
 export interface HoldingListParams {

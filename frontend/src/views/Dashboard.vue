@@ -5,7 +5,7 @@ import { ref, onMounted, computed } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { holdingApi } from '@/api/holding'
 import type { HoldingSummary } from '@/api/types'
-import { fmtMoney, fmtPercent, pnlColor, toDecimal } from '@/utils/decimal'
+import { fmtMoney, pnlColor, toDecimal } from '@/utils/decimal'
 
 const summary = ref<HoldingSummary | null>(null)
 const displayCurrency = ref<'CNY' | 'raw'>('CNY')
@@ -23,6 +23,14 @@ async function load() {
 }
 
 const pnlClass = computed(() => pnlColor(summary.value?.total_pnl))
+
+// 统一堆型护栏：后端万一返回 null 或非数组时不让 el-table 报 "rows is not iterable"
+function safeRows<T>(v: T[] | null | undefined): T[] {
+  return Array.isArray(v) ? v : []
+}
+const byTypeRows = computed(() => safeRows(summary.value?.by_type))
+const byPlatformRows = computed(() => safeRows(summary.value?.by_platform))
+const byCurrencyRows = computed(() => safeRows(summary.value?.by_currency))
 
 onMounted(load)
 </script>
@@ -77,7 +85,7 @@ onMounted(load)
       <el-col :span="8">
         <div class="fv-card">
           <div style="font-weight: 600; margin-bottom: 12px;">按资产类型</div>
-          <el-table :data="summary?.by_type || []" size="small" border stripe>
+          <el-table :data="byTypeRows" size="small" border stripe>
             <el-table-column prop="asset_type" label="类型" width="90" />
             <el-table-column label="市值" align="right">
               <template #default="{ row }">{{ fmtMoney(row.market_value) }}</template>
@@ -91,7 +99,7 @@ onMounted(load)
       <el-col :span="8">
         <div class="fv-card">
           <div style="font-weight: 600; margin-bottom: 12px;">按平台</div>
-          <el-table :data="summary?.by_platform || []" size="small" border stripe>
+          <el-table :data="byPlatformRows" size="small" border stripe>
             <el-table-column prop="platform_name" label="平台" />
             <el-table-column label="市值" align="right">
               <template #default="{ row }">{{ fmtMoney(row.market_value) }}</template>
@@ -105,7 +113,7 @@ onMounted(load)
       <el-col :span="8">
         <div class="fv-card">
           <div style="font-weight: 600; margin-bottom: 12px;">按币种</div>
-          <el-table :data="summary?.by_currency || []" size="small" border stripe>
+          <el-table :data="byCurrencyRows" size="small" border stripe>
             <el-table-column prop="currency" label="币种" width="90" />
             <el-table-column label="市值" align="right">
               <template #default="{ row }">{{ fmtMoney(row.market_value, row.currency) }}</template>

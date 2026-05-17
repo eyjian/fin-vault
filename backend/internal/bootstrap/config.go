@@ -27,23 +27,23 @@ import (
 //
 // 加载流程：viper 仅在 LoadConfig 调用一次；其余模块通过本结构体取值，禁止再读 viper。
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	Database DatabaseConfig `mapstructure:"database"`
-	Cache    CacheConfig    `mapstructure:"cache"`
-	Log      LogConfig      `mapstructure:"log"`
-	Auth     AuthConfig     `mapstructure:"auth"`
-	Security SecurityConfig `mapstructure:"security"`
+	Server   ServerConfig       `mapstructure:"server"`
+	Database DatabaseConfig     `mapstructure:"database"`
+	Cache    CacheConfig        `mapstructure:"cache"`
+	Log      LogConfig          `mapstructure:"log"`
+	Auth     AuthConfig         `mapstructure:"auth"`
+	Security SecurityConfig     `mapstructure:"security"`
 	LLM      llm.RegistryConfig `mapstructure:"llm"`
-	Quote    QuoteConfig    `mapstructure:"quote"`
-	Cron     CronConfig     `mapstructure:"cron"`
-	JWT      JWTConfig      `mapstructure:"jwt"`
+	Quote    QuoteConfig        `mapstructure:"quote"`
+	Cron     CronConfig         `mapstructure:"cron"`
+	JWT      JWTConfig          `mapstructure:"jwt"`
 }
 
 // ServerConfig HTTP 服务配置。
 type ServerConfig struct {
 	Host         string        `mapstructure:"host"`
 	Port         int           `mapstructure:"port"`
-	Mode         string        `mapstructure:"mode"`           // debug/release/test
+	Mode         string        `mapstructure:"mode"` // debug/release/test
 	ReadTimeout  time.Duration `mapstructure:"read_timeout"`
 	WriteTimeout time.Duration `mapstructure:"write_timeout"`
 	CORSOrigins  []string      `mapstructure:"cors_origins"`
@@ -74,14 +74,28 @@ type RedisConfig struct {
 }
 
 // LogConfig 日志配置。
+//
+// 文件输出 + 大小滚动备份（基于 lumberjack）：
+//   - File：日志文件路径，留空则仅输出到 stdout
+//   - MaxSizeMB：单个日志文件最大体积（MB），超过即滚动
+//   - MaxBackups：最多保留多少个旧日志文件
+//   - MaxAgeDays：旧日志最长保留天数（0=不按天清理）
+//   - Compress：是否对滚动后的旧日志做 gzip 压缩
+//   - Console：当 File 非空时，是否同时输出到 stdout（默认 true）
 type LogConfig struct {
-	Level  string `mapstructure:"level"`  // debug/info/warn/error
-	Format string `mapstructure:"format"` // text/json/console
+	Level      string `mapstructure:"level"`        // debug/info/warn/error
+	Format     string `mapstructure:"format"`       // text/json/console
+	File       string `mapstructure:"file"`         // 日志文件路径，例如 logs/finvault.log
+	MaxSizeMB  int    `mapstructure:"max_size_mb"`  // 单文件最大体积（MB）
+	MaxBackups int    `mapstructure:"max_backups"`  // 最多保留旧文件数量
+	MaxAgeDays int    `mapstructure:"max_age_days"` // 最长保留天数
+	Compress   bool   `mapstructure:"compress"`     // 是否压缩旧文件
+	Console    bool   `mapstructure:"console"`      // 是否同时输出到控制台
 }
 
 // AuthConfig 认证配置（一阶段单用户固定 X-User-Id=DefaultUserID）。
 type AuthConfig struct {
-	Mode          string `mapstructure:"mode"`            // local/jwt
+	Mode          string `mapstructure:"mode"` // local/jwt
 	DefaultUserID uint   `mapstructure:"default_user_id"`
 }
 
@@ -188,6 +202,12 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "text")
+	v.SetDefault("log.file", "logs/finvault.log")
+	v.SetDefault("log.max_size_mb", 50)
+	v.SetDefault("log.max_backups", 10)
+	v.SetDefault("log.max_age_days", 30)
+	v.SetDefault("log.compress", true)
+	v.SetDefault("log.console", true)
 
 	v.SetDefault("auth.mode", "local")
 	v.SetDefault("auth.default_user_id", 1)

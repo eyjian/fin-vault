@@ -145,18 +145,47 @@ func (s *HoldingService) SwitchCostMethod(ctx context.Context, userID, id uint, 
 	return s.holdingRepo.Update(ctx, h)
 }
 
-// HoldingSummary 三维聚合（type / platform / currency）。
-type HoldingSummary struct {
-	ByType     map[string]decimal.Decimal `json:"by_type"`
-	ByPlatform map[string]decimal.Decimal `json:"by_platform"`
-	ByCurrency map[string]decimal.Decimal `json:"by_currency"`
-	Total      decimal.Decimal            `json:"total"`
-	Currency   string                     `json:"currency"`
+// SummaryByType 按资产类型聚合行。
+type SummaryByType struct {
+	AssetType   string          `json:"asset_type"`
+	MarketValue decimal.Decimal `json:"market_value"`
+	Ratio       decimal.Decimal `json:"ratio"`
 }
 
-// Summary 三维聚合：按 type / platform / currency 汇总市值。
+// SummaryByPlatform 按平台聚合行。
+type SummaryByPlatform struct {
+	PlatformID   uint            `json:"platform_id"`
+	PlatformName string          `json:"platform_name"`
+	MarketValue  decimal.Decimal `json:"market_value"`
+	Ratio        decimal.Decimal `json:"ratio"`
+}
+
+// SummaryByCurrency 按币种聚合行。
+type SummaryByCurrency struct {
+	Currency    string          `json:"currency"`
+	MarketValue decimal.Decimal `json:"market_value"`
+	Ratio       decimal.Decimal `json:"ratio"`
+}
+
+// HoldingSummary 持仓总览：总计 + 三维聚合（type / platform / currency）。
 //
-// displayCurrency: "raw"=原币种汇总、"CNY"=统一折算到人民币。
+// 注意：所有切片字段始终初始化为非 nil，避免 JSON 序列化为 null 导致前端 el-table 报
+// "rows is not iterable"。
+type HoldingSummary struct {
+	DisplayCurrency  string              `json:"display_currency"`
+	TotalMarketValue decimal.Decimal     `json:"total_market_value"`
+	TotalCost        decimal.Decimal     `json:"total_cost"`
+	TotalPnL         decimal.Decimal     `json:"total_pnl"`
+	PnLRatio         decimal.Decimal     `json:"pnl_ratio"`
+	ByType           []SummaryByType     `json:"by_type"`
+	ByPlatform       []SummaryByPlatform `json:"by_platform"`
+	ByCurrency       []SummaryByCurrency `json:"by_currency"`
+}
+
+// Summary 三维聚合：按 type / platform / currency 汇总市值，并附带总市值/成本/盈亏。
+//
+// displayCurrency: "raw"=原币种汇总（不折算，仅 by_currency 维度有意义）、
+// "CNY"=统一折算到人民币。
 func (s *HoldingService) Summary(ctx context.Context, userID uint, displayCurrency string) (*HoldingSummary, error) {
 	holdings, _, err := s.holdingRepo.ListByUser(ctx, repository.ListOptions{
 		UserID:   userID,
@@ -168,11 +197,14 @@ func (s *HoldingService) Summary(ctx context.Context, userID uint, displayCurren
 		return nil, errs.ErrDB.WithCause(err)
 	}
 	summary := &HoldingSummary{
-		ByType:     map[string]decimal.Decimal{},
-		ByPlatform: map[string]decimal.Decimal{},
-		ByCurrency: map[string]decimal.Decimal{},
-		Total:      decimal.Zero,
-		Currency:   displayCurrency,
+		DisplayCurrency:  displayCurrency,
+		TotalMarketValue: decimal.Zero,
+		TotalCost:        decimal.Zero,
+		TotalPnL:         decimal.Zero,
+		PnLRatio:         decimal.Zero,
+		ByType:           []SummaryByType{},
+		ByPlatform:       []SummaryByPlatform{},
+		ByCurrency:       []SummaryByCurrency{},
 	}
 	if len(holdings) == 0 {
 		return summary, nil
@@ -189,12 +221,21 @@ func (s *HoldingService) Summary(ctx context.Context, userID uint, displayCurren
 		platformName[p.ID] = p.Name
 	}
 
+	// 中间累加 map：保持插入有序聚合，最后再展开成切片。
+	typeAgg := map[string]decimal.Decimal{}
+	typeOrder := make([]string, 0)
+	platAggMV := map[uint]decimal.Decimal{}
+	platOrder := make([]uint, 0)
+	currAgg := map[string]decimal.Decimal{}
+	currOrder := make([]string, 0)
+
 	for i := range holdings {
 		h := holdings[i]
 		view := s.buildView(&h, quoteMap[h.AssetID])
 
-		// 折算
+		// 折算市值与成本到展示币种
 		mv := view.MarketValue
+		cost := h.TotalCost
 		curr := "CNY"
 		if h.Asset != nil {
 			curr = h.Asset.Currency
@@ -205,22 +246,87 @@ func (s *HoldingService) Summary(ctx context.Context, userID uint, displayCurren
 				return nil, errs.ErrExchangeRateNotFound.WithMsg("missing rate for " + curr + "->CNY")
 			}
 			mv = mv.Mul(rate.Rate).Round(2)
+			cost = cost.Mul(rate.Rate).Round(2)
 		}
 
-		// 汇总
+		// 总计累加
+		summary.TotalMarketValue = summary.TotalMarketValue.Add(mv)
+		summary.TotalCost = summary.TotalCost.Add(cost)
+
+		// 按类型
 		assetType := ""
 		if h.Asset != nil {
 			assetType = string(h.Asset.AssetType)
 		}
-		summary.ByType[assetType] = summary.ByType[assetType].Add(mv)
-		pname := platformName[h.PlatformID]
-		if pname == "" {
-			pname = "unknown"
+		if _, ok := typeAgg[assetType]; !ok {
+			typeOrder = append(typeOrder, assetType)
 		}
-		summary.ByPlatform[pname] = summary.ByPlatform[pname].Add(mv)
-		summary.ByCurrency[curr] = summary.ByCurrency[curr].Add(mv)
-		summary.Total = summary.Total.Add(mv)
+		typeAgg[assetType] = typeAgg[assetType].Add(mv)
+
+		// 按平台
+		if _, ok := platAggMV[h.PlatformID]; !ok {
+			platOrder = append(platOrder, h.PlatformID)
+		}
+		platAggMV[h.PlatformID] = platAggMV[h.PlatformID].Add(mv)
+
+		// 按币种（用原币种维度，不受 displayCurrency 影响时也用 mv 累计折算后金额，便于 UI 占比展示）
+		if _, ok := currAgg[curr]; !ok {
+			currOrder = append(currOrder, curr)
+		}
+		currAgg[curr] = currAgg[curr].Add(mv)
 	}
+
+	// 总盈亏 = 总市值 - 总成本；收益率 = 总盈亏 / 总成本（成本为 0 时给 0）
+	summary.TotalPnL = summary.TotalMarketValue.Sub(summary.TotalCost).Round(2)
+	if !summary.TotalCost.IsZero() {
+		summary.PnLRatio = summary.TotalPnL.Div(summary.TotalCost).Round(6)
+	}
+
+	// 展开聚合 map -> 切片，并计算 ratio（保留 4 位）。
+	ratioOf := func(mv decimal.Decimal) decimal.Decimal {
+		if summary.TotalMarketValue.IsZero() {
+			return decimal.Zero
+		}
+		return mv.Div(summary.TotalMarketValue).Round(4)
+	}
+	for _, k := range typeOrder {
+		summary.ByType = append(summary.ByType, SummaryByType{
+			AssetType:   k,
+			MarketValue: typeAgg[k],
+			Ratio:       ratioOf(typeAgg[k]),
+		})
+	}
+	for _, pid := range platOrder {
+		name := platformName[pid]
+		if name == "" {
+			name = "unknown"
+		}
+		summary.ByPlatform = append(summary.ByPlatform, SummaryByPlatform{
+			PlatformID:   pid,
+			PlatformName: name,
+			MarketValue:  platAggMV[pid],
+			Ratio:        ratioOf(platAggMV[pid]),
+		})
+	}
+	for _, k := range currOrder {
+		summary.ByCurrency = append(summary.ByCurrency, SummaryByCurrency{
+			Currency:    k,
+			MarketValue: currAgg[k],
+			Ratio:       ratioOf(currAgg[k]),
+		})
+	}
+
+	// 各维度按市值降序排序，UI 展示更直观
+	sort.Slice(summary.ByType, func(i, j int) bool {
+		return summary.ByType[i].MarketValue.GreaterThan(summary.ByType[j].MarketValue)
+	})
+	sort.Slice(summary.ByPlatform, func(i, j int) bool {
+		return summary.ByPlatform[i].MarketValue.GreaterThan(summary.ByPlatform[j].MarketValue)
+	})
+	sort.Slice(summary.ByCurrency, func(i, j int) bool {
+		return summary.ByCurrency[i].MarketValue.GreaterThan(summary.ByCurrency[j].MarketValue)
+	})
+
 	return summary, nil
 }
 
@@ -242,6 +348,3 @@ func (s *HoldingService) buildView(h *domain.Holding, q *domain.PriceQuote) doma
 	}
 	return view
 }
-
-// 编译期反向断言：保证 sort.Slice 在某些场景使用（部分 IDE 容易误报未使用导入）
-var _ = sort.Slice

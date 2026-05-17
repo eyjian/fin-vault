@@ -1,5 +1,6 @@
-import { get, post, PageResp } from './http'
-import type { AIConversation, AIMessage, ProviderInfo, AIScene } from './types'
+import type { PageResp } from './http'
+import { get, post } from './http'
+import type { AIConversation, AIMessage, AIScene, ProviderInfo } from './types'
 
 export interface CreateConvReq {
   title?: string
@@ -95,9 +96,9 @@ export async function* aiStream(req: StreamReq, signal?: AbortSignal): AsyncGene
       const json = line.slice(5).trim()
       if (!json) continue
       try {
-        // 后端做了 \n -> \\n 转义，这里反向还原
-        const restored = json.replace(/\\n/g, '\n')
-        const ev = JSON.parse(restored) as StreamEvent
+        // 后端用标准 json.Marshal 输出，控制字符已被转义（\n 等），
+        // 直接 JSON.parse 即可；不要再做任何字符串还原。
+        const ev = JSON.parse(json) as StreamEvent
         yield ev
         if (ev.type === 'done' || ev.type === 'error') return
       } catch (e) {

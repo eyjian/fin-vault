@@ -1,4 +1,5 @@
-import { get, post, del, PageResp } from './http'
+import { get, post, del } from './http'
+import type { PageResp } from './http'
 import type { Transaction, TxnType } from './types'
 
 export interface TxnListParams {

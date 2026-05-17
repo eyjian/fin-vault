@@ -1,7 +1,7 @@
 # FinVault 后端配置（第一阶段：本地 SQLite + 单 LLM Provider）
 server:
   host: "0.0.0.0"
-  port: 8080
+  port: 2026
   read_timeout: 30s
   write_timeout: 30s
   mode: "debug"           # debug/release/test
@@ -28,34 +28,35 @@ llm:
   providers:
     deepseek:
       enabled: true
-      api_key: ""
-      base_url: "https://api.deepseek.com/v1"
-      model: "deepseek-chat"
-      timeout: 60s
+      api_key: "${DEEPSEEK_API_KEY:}"        # 从环境变量读取，不要提交真实 key 到仓库
+      base_url: "https://api.deepseek.com"        # 官方推荐写法（OpenAI 兼容）
+      # 可选 model：deepseek-v4-flash / deepseek-v4-pro / deepseek-chat / deepseek-reasoner
+      model: "deepseek-v4-pro"
+      timeout_sec: 60
     glm:
       enabled: false
-      api_key: ""
+      api_key: "${GLM_API_KEY:}"
       base_url: "https://open.bigmodel.cn/api/paas/v4"
       model: "glm-4-flash"
-      timeout: 60s
+      timeout_sec: 60
     kimi:
       enabled: false
-      api_key: ""
+      api_key: "${KIMI_API_KEY:}"
       base_url: "https://api.moonshot.cn/v1"
       model: "moonshot-v1-8k"
-      timeout: 60s
+      timeout_sec: 60
     qwen:
       enabled: false
-      api_key: ""
+      api_key: "${QWEN_API_KEY:}"
       base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
       model: "qwen-turbo"
-      timeout: 60s
+      timeout_sec: 60
     ollama:
       enabled: false
-      api_key: ""
+      api_key: "${OLLAMA_API_KEY:}"        # 本地 ollama 可以留空
       base_url: "http://127.0.0.1:11434/v1"
       model: "qwen2.5:7b"
-      timeout: 120s
+      timeout_sec: 120
 
 # 行情数据源
 quote:
@@ -71,8 +72,14 @@ cron:
 log:
   level: "info"           # debug/info/warn/error
   format: "text"          # text/json
+  file: "logs/finvault.log"   # 日志文件路径，留空则只输出到 stdout
+  max_size_mb: 50         # 单个日志文件最大体积（MB），超过即滚动
+  max_backups: 10         # 最多保留旧日志文件数量
+  max_age_days: 30        # 旧日志最长保留天数（0=不按天清理）
+  compress: true          # 滚动后的旧日志是否 gzip 压缩
+  console: true           # 是否同时输出到控制台
 
 # JWT（第一阶段未启用认证，先占位）
 jwt:
-  secret: "fin-vault-secret-change-me"
+  secret: "${JWT_SECRET:fin-vault-secret-change-me}"
   expire: 168h

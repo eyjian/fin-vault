@@ -19,6 +19,7 @@ import (
 type openaiProvider struct {
 	name        string
 	model       string
+	baseURL     string // 仅用于错误信息中诊断，不参与请求
 	temperature float32
 	maxTokens   int
 	client      *openai.Client
@@ -48,10 +49,56 @@ func NewOpenAIProvider(name string, cfg ProviderConfig) (Provider, error) {
 	return &openaiProvider{
 		name:        name,
 		model:       cfg.Model,
+		baseURL:     oc.BaseURL,
 		temperature: cfg.Temperature,
 		maxTokens:   cfg.MaxTokens,
 		client:      openai.NewClientWithConfig(oc),
 	}, nil
+}
+
+// wrapErr 给上游的错误带上 provider 名、base_url、model 等诊断信息，
+// 让 404/401/connection refused 这类常见问题一眼能定位（例如 base_url 写错）。
+func (p *openaiProvider) wrapErr(stage string, err error) error {
+	hint := classifyErr(err)
+	if hint != "" {
+		return fmt.Errorf("openai %s [provider=%s base_url=%s model=%s] %s: %w",
+			stage, p.name, p.baseURL, p.model, hint, err)
+	}
+	return fmt.Errorf("openai %s [provider=%s base_url=%s model=%s]: %w",
+		stage, p.name, p.baseURL, p.model, err)
+}
+
+// classifyErr 把 go-openai 的 APIError / 网络错误归类成中文人话提示，
+// 帮助前端日志一眼定位是配置问题还是账户问题还是网络问题。
+func classifyErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	var apiErr *openai.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.HTTPStatusCode {
+		case 401:
+			return "鉴权失败：api_key 无效或已过期"
+		case 402:
+			return "账户余额不足：请前往厂商控制台充值或更换 provider"
+		case 403:
+			return "权限不足：可能是 IP 未授权或模型未开通"
+		case 404:
+			return "路径/模型不存在：请检查 base_url 是否带了多余的 /v4 等前缀，以及 model 名是否正确"
+		case 429:
+			return "请求被限流：QPS/TPM 超限或免费额度耗尽"
+		case 500, 502, 503, 504:
+			return "厂商服务异常：稍后重试或临时切换其它 provider"
+		}
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "connection refused") {
+		return "连接被拒绝：base_url 不可达（本地服务未启动？）"
+	}
+	if strings.Contains(msg, "no such host") {
+		return "域名解析失败：base_url 写错或网络不通"
+	}
+	return ""
 }
 
 // Name 返回 Provider 名。
@@ -64,7 +111,7 @@ func (p *openaiProvider) Model() string { return p.model }
 func (p *openaiProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	resp, err := p.client.CreateChatCompletion(ctx, p.buildRequest(req, nil, false))
 	if err != nil {
-		return nil, fmt.Errorf("openai chat: %w", err)
+		return nil, p.wrapErr("chat", err)
 	}
 	if len(resp.Choices) == 0 {
 		return &ChatResponse{Model: resp.Model, FinishReason: "stop"}, nil
@@ -76,7 +123,7 @@ func (p *openaiProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 func (p *openaiProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan Chunk, error) {
 	stream, err := p.client.CreateChatCompletionStream(ctx, p.buildRequest(req, nil, true))
 	if err != nil {
-		return nil, fmt.Errorf("openai stream: %w", err)
+		return nil, p.wrapErr("stream", err)
 	}
 
 	out := make(chan Chunk, 16)
@@ -147,7 +194,7 @@ func (p *openaiProvider) ChatWithTools(ctx context.Context, req ChatRequest, too
 	openaiTools := convertTools(tools)
 	resp, err := p.client.CreateChatCompletion(ctx, p.buildRequest(req, openaiTools, false))
 	if err != nil {
-		return nil, fmt.Errorf("openai chat with tools: %w", err)
+		return nil, p.wrapErr("chat with tools", err)
 	}
 	if len(resp.Choices) == 0 {
 		return &ChatResponse{Model: resp.Model, FinishReason: "stop"}, nil

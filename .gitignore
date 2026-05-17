@@ -12,6 +12,7 @@
 # 本地数据库与导出文件
 backend/data/
 backend/dist/
+backend/logs/
 *.db
 *.db-journal
 *.sqlite
@@ -29,6 +30,13 @@ frontend/dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# 敏感信息（API key / secret 等本地环境文件，绝对不要提交）
+.env
+.env.local
+.env.*.local
+*.secret
+secrets/
 
 # ai-rd-team runtime（运行时状态、日志、归档；其余 .ai-rd-team 子目录入库）
 .ai-rd-team/runtime/

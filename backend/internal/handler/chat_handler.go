@@ -4,15 +4,13 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"strings"
-
-	"github.com/gin-gonic/gin"
 
 	"github.com/eyjian/fin-vault/backend/internal/domain"
 	"github.com/eyjian/fin-vault/backend/internal/repository"
 	"github.com/eyjian/fin-vault/backend/internal/service"
 	"github.com/eyjian/fin-vault/backend/pkg/errs"
 	"github.com/eyjian/fin-vault/backend/pkg/utils/response"
+	"github.com/gin-gonic/gin"
 )
 
 // ChatHandler AI 对话接口（含 SSE 流式）。
@@ -139,7 +137,9 @@ func (h *ChatHandler) Stream(c *gin.Context) {
 		if !ok {
 			return false
 		}
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", strings.ReplaceAll(service.MarshalEvent(ev), "\n", "\\n"))
+		// json.Marshal 已将所有控制字符（含 \n）转义为 \\n 等转义序列，
+		// 输出本身不含真实换行，SSE 帧不会被 \n\n 截断，无需再做替换。
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", service.MarshalEvent(ev))
 		return ev.Type != "done" && ev.Type != "error"
 	})
 }

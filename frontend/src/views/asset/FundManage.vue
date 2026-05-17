@@ -5,15 +5,15 @@
 //   - 录入：基金主表 + FundDetail
 //   - 操作：编辑 / 刷新净值（quotes/refresh）/ 录入流水（buy/sell/dividend/dividend_reinvest）
 
-import { ref, reactive, onMounted, computed } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Plus, Edit, Delete, Money } from '@element-plus/icons-vue'
 import { assetApi } from '@/api/asset'
 import { quoteApi } from '@/api/quote'
-import { usePlatformStore } from '@/stores/platform'
 import type { Asset, FundDetail } from '@/api/types'
 import MoneyInput from '@/components/MoneyInput.vue'
 import TxnDialog from '@/components/TxnDialog.vue'
+import { usePlatformStore } from '@/stores/platform'
+import { Delete, Edit, Money, Plus, Refresh } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, onMounted, reactive, ref } from 'vue'
 
 const platformStore = usePlatformStore()
 
@@ -79,17 +79,32 @@ function openEdit(a: Asset) {
   formVisible.value = true
 }
 
+// 提交前清洗：把空串数值/日期字段去掉，避免后端 decimal/time 解析失败
+function sanitizePayload(a: Asset): Asset {
+  const p: any = JSON.parse(JSON.stringify(a))
+  if (p.fund_detail) {
+    const fd = p.fund_detail
+    if (fd.latest_nav === '' || fd.latest_nav == null) delete fd.latest_nav
+    if (!fd.latest_nav_date) delete fd.latest_nav_date
+    if (!fd.inception_date) delete fd.inception_date
+  }
+  if (p.issuer_platform_id == null) delete p.issuer_platform_id
+  if (!p.risk_level) delete p.risk_level
+  return p as Asset
+}
+
 async function submitForm() {
   if (!form.value.asset_code || !form.value.name) {
     ElMessage.warning('代码与名称必填')
     return
   }
   try {
+    const payload = sanitizePayload(form.value)
     if (isEdit.value && form.value.id) {
-      await assetApi.update(form.value.id, form.value)
+      await assetApi.update(form.value.id, payload)
       ElMessage.success('更新成功')
     } else {
-      await assetApi.create(form.value)
+      await assetApi.create(payload)
       ElMessage.success('新增成功')
     }
     formVisible.value = false
