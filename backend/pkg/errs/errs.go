@@ -132,6 +132,8 @@ var (
 	ErrAIProviderDisabled     = New(50003, "llm provider disabled")
 	ErrAIRequestFailed        = New(50004, "llm request failed")
 	ErrAIToolCallFailed       = New(50005, "llm tool call failed")
+	ErrAIProviderRateLimited  = New(50006, "llm provider rate limited")
+	ErrAIToolNotFound         = New(50007, "tool not found")
 )
 
 // =====================================================================

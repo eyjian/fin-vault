@@ -50,6 +50,7 @@
 
 ## 5. trpc-agent-go 适配
 
+- [ ] 5.0 在 `pkg/errs/errs.go` 新增 `ErrAIProviderRateLimited`（50006）/ `ErrAIToolNotFound`（50007）两个错误码（已先期完成于 Step 5-pre commit；dev 在 §5.4 错误映射时直接复用，不重做）
 - [ ] 5.1 实现 `model/factory.go`：按 `llm.providers.<name>` 配置生成 OpenAI 兼容 Model；`llm.default` 不可用时按字典序 fallback 并记录 warn 日志
 - [ ] 5.2 实现 `agent/runner_trpc.go`：包装 trpc-agent-go 的 Runner / Session / Tool，实现 `Runner` 接口
 - [ ] 5.3 把所有 step 事件（tool_call_started / tool_call_finished / token_usage / step_boundary）通过 `SessionStore.AppendStep` 落库

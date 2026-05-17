@@ -168,6 +168,69 @@ backend/internal/llm/
 - 双轨保留旧 AI 直至 §7 再删（被否：表名冲突无法绕开）。
 - 用 `_v2_` 等前缀做新表（被否：长期债，违反命名规范且 §6/§7 还得回头清理）。
 
+### D11：SDK 错误映射策略
+
+**场景与映射**（统一在 `backend/internal/llm/agent/error_mapping.go` 内实现，独立可测）：
+
+| 来源 | SDK 表现 | 业务错误码 | HTTP |
+|---|---|---|---|
+| 工具内部 **panic** | event_handler 在消费 channel 时 recover 到 panic | `ErrAIToolCallFailed`（50005） | 500 |
+| 工具返回 **error**（非 panic） | event 中 ToolCall 带错误信息 | **不返回错误**：在聚合的 `[]ToolCall` 中把对应项 `Status="failed"` + 填 `ErrorMessage`，业务 `Runner.Run` 仍 success | — |
+| 上游 LLM Provider 4xx 限流（HTTP 429） | SDK 透传 OpenAI 兼容协议错误 | `ErrAIProviderRateLimited`（50006） | 503 |
+| 上游 LLM Provider 5xx | SDK 透传 5xx | `ErrAIRequestFailed`（50004） | 500 |
+| 调用未注册工具 | SDK 抛 unknown tool 类错误 | `ErrAIToolNotFound`（50007） | 400 |
+
+**实现要点**：
+
+- `event_handler.go` 消费 SDK event channel；识别 SDK 错误类型后调用 `error_mapping.go` 的 `MapSDKError(err) errs.AppError`。
+- 工具 error vs panic 的差别在 SDK event 中已区分（panic 走 recover 路径，error 进 ToolCall.Error 字段）；event_handler 必须区别处理：panic → 整体失败；error → ToolCall.Status="failed" 但 Run 仍成功。
+- 区分 4xx 限流 vs 其它 4xx：依据 SDK error 的 HTTP status 字段（OpenAI 兼容 client 通常透传），仅 429 走 `ErrAIProviderRateLimited`。
+- 未识别的错误兜底为 `ErrAIRequestFailed`。
+
+**理由**：
+
+- 五个错误码（50004 / 50005 / 50006 / 50007 + 工具失败软错误）覆盖 design 摸底报告中评估的全部错误路径。
+- 工具失败软错误（不返回 error 但标记 Status=failed）与 OpenAI Function Calling 语义对齐：工具失败是模型可处理的信号，不该把整次 Run 拖垮，让 assistant 有机会基于失败信号继续决策（重试 / 询问用户 / 走兜底分支）。
+- 集中在 `error_mapping.go` 实现，单测可覆盖每个分支，无需启 SDK 真正调用。
+
+### D12：业务 Runner 与 SDK 衔接方案 A（inmemory session.Service）
+
+**选择**：
+
+业务层的 `session.SessionStore`（D8 / §3.3 / §4）与 SDK 的 `session.Service` **是两套独立模型**，不互相代理。具体：
+
+- SDK Runner 构造时注入 SDK 自带的 `inmemory.NewSessionService()`（每次 `Runner.Run` 内的 working memory，请求结束即丢弃）。
+- 业务持久化路径完全由我们的 `SessionStore` 控制，与 SDK 解耦。
+
+**§5.2 五步流程**（`agent/runner_trpc.go` 内实现）：
+
+1. service 层调业务 `Runner.Run(ctx, sessionID, userMsg)`
+2. 业务 Runner 内：① 调 `SessionStore.ListMessages(ctx, sessionID, 0)` 拉最近 N 条历史（N = config.AI.Session.HistoryWindow）
+3. ② 把历史 + 当前 userMsg 转换为 SDK `model.Message[]` 序列
+4. ③ 调 SDK `runner.NewRunner(...)` 创建 Runner 后调 `Run(ctx, userID, sessionID, model.Message)` 拿 `<-chan *event.Event`
+5. ④ `event_handler` 消费 channel：聚合 assistant message text、收集 ToolCall（带 started/finished/status/error_message）、累加 TokenUsage
+6. ⑤ 按 step 事件分别落库：
+   - 每个 ToolCall start/end 事件 → `SessionStore.AppendStep(ctx, AgentStep{event_type, tool_name, payload})`，payload 写库前过 mask
+   - assistant 最终消息 → `SessionStore.AppendMessage(ctx, Message{role="assistant", content, token_usage})`
+   - user 消息（入参的 userMsg）也由业务 Runner 在步骤 ① 之前调用 AppendMessage 落库，**不依赖 service 层落 user 消息**（避免 service 与 Runner 双写竞争）
+7. ⑥ 返回业务接口聚合结果 `(assistantMsg, []ToolCall, TokenUsage, error)`
+
+**红线**（与 D8 一致）：
+
+- trpc-agent-go 的 import 仅出现在 `internal/llm/agent/` 与 `internal/llm/model/` 包内，业务代码（service / handler）零命中。
+- §5 验收时由 tester 跑 `grep -r "trpc.group/trpc-go/trpc-agent-go" backend/internal/{service,handler}/` 确认 0 命中。
+
+**理由**：
+
+- SDK 的 session.Service 抽象偏向"SDK 内部状态"，与我们持久化语义（用户隔离 / history_window / step 落库 / mask）耦合度低；做适配器需要双向数据转换，工作量大且增加心智负担。
+- inmemory session.Service 的"working memory"特性正好匹配单次 Run 的语义，请求结束即丢弃，不残留任何状态。
+- 业务 Runner 自管 message 持久化让 mask / history_window / 用户隔离逻辑全部集中在 `SessionStore`，符合单一职责。
+
+**备选**：
+
+- 实现 `session.Service` 适配器，把 SDK Service 调用代理到我们的 SessionStore（被否：双向适配代码量翻倍，session 模型语义不完全对齐，调试困难）。
+- 直接使用 SDK 的 PG/MySQL session.Service 实现（被否：fin-vault 主存 SQLite + 业务表用 GORM AutoMigrate，引入 SDK 的另一套表破坏数据模型一致性）。
+
 ## Risks / Trade-offs
 
 | 风险 | 缓解 |
