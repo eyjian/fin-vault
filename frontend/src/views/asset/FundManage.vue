@@ -14,8 +14,15 @@ import { usePlatformStore } from '@/stores/platform'
 import { Delete, Edit, Money, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 const platformStore = usePlatformStore()
+const router = useRouter()
+
+function viewTxn(a: Asset) {
+  if (!a.id) return
+  window.open(`/transaction?asset_id=${a.id}`, '_blank')
+}
 
 const list = ref<Asset[]>([])
 const total = ref(0)
@@ -224,9 +231,10 @@ const platformName = computed(() => (id?: number | null) => platformStore.nameOf
             <el-tag size="small" :type="row.status === 'active' ? 'success' : 'info'">{{ row.status }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="320" fixed="right">
           <template #default="{ row }">
             <el-button size="small" :icon="Money" @click="openTxn(row)">录流水</el-button>
+            <el-button size="small" @click="viewTxn(row)">查看流水</el-button>
             <el-button size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
             <el-button size="small" type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
           </template>
