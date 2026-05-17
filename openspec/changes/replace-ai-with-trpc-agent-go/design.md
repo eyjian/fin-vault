@@ -325,7 +325,36 @@ ctxKey 类型 unexported 防止其它包伪造 key 绕过隔离；只通过 `Wit
 - 触碰 §5 已"完成"代码（runner_trpc.go + event_handler.go）—— 本质是补 §5 设计漏洞而非返工，触碰范围限于 agent 包内；不会重新破坏 §5 验收已通过的 D11/D12 行为契约
 - 扩展 appendStepSafe 签名是 §5 接口面变更—— 该函数 unexported 仅 agent 包内调用，无外部消费者，影响范围限于本议题
 
-## Risks / Trade-offs
+### D15：AI handler X-User-Id 强校验（缺失即 401）
+
+**背景**：
+
+- spec ai-session §13-17 明确："未登录用户调用 `POST /api/v1/ai/sessions` → 401 Unauthorized + 不创建任何记录"
+- 当前 `middleware.Auth` 在 `Mode="local"` 下走 `X-User-Id` Header 取值；缺失或非法时 fallback 到 `DefaultUserID=1`（默认）
+- 当前 `handler/common.go` 的 `userIDFromHeader(c)` 同样 fallback 到 1 —— 在 asset/holding/transaction 等核心路由是合理的（单用户模式默认本人操作）
+- 但 AI 路由不能 fallback：fallback 等于"任何匿名请求都被当作用户 1"，违反 spec "未登录被拒绝" + D2 跨用户隔离前提（隔离的前提是 userID 真实可信）
+
+**规则**：
+
+1. **AI handler 用独立 helper**：在 `backend/internal/handler/common.go` 新增 `requireUserIDFromHeader(c *gin.Context) (uint, bool)` —— Header 缺失或解析失败或值为 0 时返 `(0, false)`；调用方判断 `!ok` 时立即 `response.Fail(c, errs.ErrUnauthorized)` 并 return
+2. **覆盖范围**：仅 AI 路由（`/api/v1/ai/sessions/*`、`/api/v1/ai/sessions/:id/messages`）使用 `requireUserIDFromHeader`；`/api/v1/ai/providers`（meta 端点，无用户数据）保持现状用 `userIDFromHeader` 或不取 userID
+3. **不动 middleware.Auth**：保持其 `local` 模式 fallback 行为不变，避免破坏现有所有非 AI 路由的兼容性（asset/holding/transaction 等仍能用空 Header 默认用户 1 工作）
+4. **二阶段切 JWT**：当 `Mode="jwt"` 启用后，`requireUserIDFromHeader` 升级为 "JWT claims 取 sub → uint"，缺失/无效仍返 401；handler 调用方代码不变
+
+**理由**：
+
+- spec 合规：未登录 → 401（不走 fallback=1 假冒成功）
+- 跨用户隔离前提：D2 用户隔离的有效性依赖 `userID` 真实可信；fallback=1 会让所有匿名请求被认为是用户 1 → D2 失效
+- 影响最小：不动 middleware（受影响面小）、不动现有非 AI handler、新 helper 与 AI handler 一一对应
+
+**备选**：
+
+- 改 `middleware.Auth` 加 `RequireAuth` flag，AI 路由 group 单独挂带 `RequireAuth=true` 的 Auth → 工程量大、改动面广，且现 router.go 中所有路由共用同一个 Auth 中间件实例
+- 在 `requireUserIDFromHeader` 内部直接 `c.AbortWithStatus(401)` → 避免，handler 应统一走 `response.Fail` 拿到结构化日志 + request_id
+
+**风险**：
+
+- 引入 AI 路由独有的认证风格 —— 可控：通过 helper 命名（`require*`）即可表明强校验意图；future 二阶段 JWT 全面切换后两种 helper 行为对齐
 
 | 风险 | 缓解 |
 |---|---|

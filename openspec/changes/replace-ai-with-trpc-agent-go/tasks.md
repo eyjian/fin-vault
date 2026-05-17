@@ -85,11 +85,14 @@
 
 > **范围调整**：旧 `chat_handler.go` / `advisor_handler.go` / `analysis_handler.go` 与 `/api/v1/ai/chat` 等旧路由已在 §2.9 删除，本节只新增。
 
-- [ ] 8.1 新增 `handler/ai_session_handler.go`：`POST/GET/DELETE /api/v1/ai/sessions`、`GET /api/v1/ai/sessions/{id}/messages`
-- [ ] 8.2 新增 `handler/ai_message_handler.go`：`POST /api/v1/ai/sessions/{id}/messages`，响应体含 `tool_calls` 数组
-- [ ] 8.3 新增 `GET /api/v1/ai/providers`：列所有可用 Provider（如已存在 `AIMetaHandler` 提供该路由，则在新 Runner 装配后接管即可，不重复实现）
-- [ ] 8.4 路由统一挂在已有的 `auth` 中间件下，未登录返回 401
-- [ ] 8.5 e2e：用 `httptest` 跑通 5 步流程（建会话 → 多轮 → search_fund → market_quote → 删会话）
+- [ ] 8.1 新增 `handler/ai_session_handler.go`：`POST /api/v1/ai/sessions`（201 Created，响应字段名 `session_id`）、`GET /api/v1/ai/sessions`（分页列表）、`GET /api/v1/ai/sessions/{id}`、`PUT /api/v1/ai/sessions/{id}`（更新 title，service.Update 已实现，spec ai-session 未禁用）、`DELETE /api/v1/ai/sessions/{id}`（**204 No Content**，spec §38-42 强制）、`GET /api/v1/ai/sessions/{id}/messages`（按 created_at 升序，仅 user/assistant 两 role）
+- [ ] 8.2 新增 `handler/ai_message_handler.go`：`POST /api/v1/ai/sessions/{id}/messages`，响应体含 `assistant_message` + `tool_calls` 数组 + `token_usage`（spec ai-tools §53-57：失败的工具调用也必须出现在数组中）
+- [ ] 8.3 `GET /api/v1/ai/providers`：dev_2 §7.1 改造的 `AIMetaHandler` 已提供该路由（直接消费 `model.RegistryConfig`，含 `Enabled` 字段），本节无新增工作量
+- [ ] 8.4 AI 路由 `X-User-Id` Header 强校验：缺失或非法（含 0）即返 `401 Unauthorized`（不走 `userIDFromHeader` 的 fallback=1 路径，spec ai-session §13-17 "未登录用户被拒绝"），新增 handler 包内 `requireUserIDFromHeader(c) (uint, bool)` helper；二阶段切 JWT 时同步升级该 helper（详见 design.md D15）
+- [ ] 8.5 e2e：用 `httptest` 走通核心流程
+  - [ ] 8.5a 本期（mock Runner）：建会话 → 列表 → 发消息（fake Runner 验证双 ctx + 第三注入）→ 删会话 → 列表为空；4xx 路径覆盖（401 缺 X-User-Id / 404 跨用户 / 400 空 body）
+  - [ ] 8.5b 留 §10：在 §9 完成 Runner 装配后扩成完整 5 步（建会话 → 多轮 → search_fund → market_quote → 删会话）
+- [ ] 8.6 wire.go 装配：`AISessionHandler` 始终装配（不依赖 Runner）；`AIMessageHandler` 条件装配——`agent.Runner` 在 §9 装配前为 nil，本期 `RegisterRoutes` 内仅当 `h.AIMessage != nil` 时才挂 `POST /sessions/:id/messages`，启动日志 Warn "AI message endpoint disabled until Runner wiring (§9)"
 
 ## 9. Bootstrap & 装配
 
