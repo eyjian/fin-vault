@@ -1,9 +1,18 @@
 # FinVault（锦仓）数据库 Schema 设计
 
-> 文档版本：v1.0  
+> 文档版本：v1.1（trpc-agent-go AI 三表替换）  
 > 创建日期：2026-05-16  
+> 最近更新：2026-05-17  
 > 状态：草稿（与代码同步演进）  
 > 关联文档：[domain-model.md](./domain-model.md)、[architecture-design.md](./architecture-design.md)
+
+> v1.1 变更摘要（议题 `replace-ai-with-trpc-agent-go`）：
+> - 删除旧表 `t_fv_ai_conversations` + 旧版 `t_fv_ai_messages`（uint 主键、含 tool_name/tool_args/tool_result/token_count 字段）
+> - 新增 3 张 AI 表（基于 trpc-agent-go SDK 适配，UUID 字符串主键）：
+>   - `t_fv_ai_sessions`：会话主表
+>   - `t_fv_ai_messages`：消息表（仅核心字段 role/content/token_usage，不含 tool 调用细节）
+>   - `t_fv_ai_agent_steps`：步骤事件流（tool_call_started / tool_call_finished / token_usage / step_boundary）
+> - 报表表号从 15 调整为 16
 
 ## 1. 总览
 
@@ -23,16 +32,17 @@
 | **行情数据** | 10 | `t_fv_quote_exchange_rates` | 汇率快照 | 多币种折算 | ✅ |
 | **资产核心** | 11 | `t_fv_core_cost_lots` | 成本批次 | FIFO 辅助 | ⚠️ 建表，默认不写入 |
 | **资产核心** | 12 | `t_fv_core_portfolios` | 投资组合 | 自定义分组 | ⚠️ 建表，UI 暂不开放 |
-| **AI 对话** | 13 | `t_fv_ai_conversations` | AI 对话会话 | AI 模块 | ✅ |
-| **AI 对话** | 14 | `t_fv_ai_messages` | AI 对话消息 | AI 模块 | ✅ |
-| **报表分析** | 15 | `t_fv_report_reports` | 报表缓存 | 周报/月报/年报 | ⚠️ 建表，第二阶段开发 |
+| **AI 会话** | 13 | `t_fv_ai_sessions` | AI 会话 | 多轮对话主表（基于 trpc-agent-go） | ✅ |
+| **AI 会话** | 14 | `t_fv_ai_messages` | AI 会话消息 | 仅 user/assistant/tool/system，归属 sessions | ✅ |
+| **AI 会话** | 15 | `t_fv_ai_agent_steps` | Agent 运行步骤 | tool_call / token_usage / step_boundary 事件流 | ✅ |
+| **报表分析** | 16 | `t_fv_report_reports` | 报表缓存 | 周报/月报/年报 | ⚠️ 建表，第二阶段开发 |
 
 **模块划分说明**：
 - **user**：用户体系相关
 - **dict**：字典表、基础数据
 - **core**：资产、持仓、交易等核心业务
 - **quote**：行情、汇率等市场数据
-- **ai**：AI 对话相关
+- **ai**：AI 会话相关（基于 trpc-agent-go：sessions / messages / agent_steps 三表）
 - **report**：报表分析相关
 - **sys**：系统配置（预留）
 
@@ -330,47 +340,72 @@ CREATE TABLE `t_fv_core_portfolios` (
 
 
 -- =================================================================
--- 13. t_fv_ai_conversations AI 对话会话表
+-- 13. t_fv_ai_sessions AI 会话主表（trpc-agent-go）
 -- =================================================================
-CREATE TABLE `t_fv_ai_conversations` (
-  `f_id` bigint unsigned NOT NULL AUTO_INCREMENT,
+-- 主键 f_id 是 RFC 4122 UUID 字符串（varchar 36），由 service 层用 google/uuid 生成；
+-- 不继承 BaseModel —— BaseModel 用 uint 自增主键，与 UUID 字符串关联设计不兼容。
+CREATE TABLE `t_fv_ai_sessions` (
+  `f_id` varchar(36) NOT NULL COMMENT 'UUID',
   `f_user_id` bigint unsigned NOT NULL,
-  `f_title` varchar(128) NOT NULL,
-  `f_scene` varchar(20) NOT NULL DEFAULT 'chat' COMMENT 'chat/buy_sell/analysis/report',
-  `f_llm_provider` varchar(32) NOT NULL,
-  `f_llm_model` varchar(64) NOT NULL,
-  `f_message_count` int NOT NULL DEFAULT '0',
-  `f_total_tokens` int NOT NULL DEFAULT '0',
-  `f_status` varchar(20) NOT NULL DEFAULT 'active' COMMENT 'active/archived/deleted',
+  `f_title` varchar(128) NOT NULL DEFAULT '',
   `f_created_at` datetime NOT NULL,
   `f_updated_at` datetime NOT NULL,
-  `f_deleted_at` datetime DEFAULT NULL,
   PRIMARY KEY (`f_id`),
-  KEY `idx_user_status_updated` (`f_user_id`, `f_status`, `f_updated_at` DESC),
-  KEY `idx_deleted_at` (`f_deleted_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 对话会话';
+  KEY `idx_user_updated` (`f_user_id`, `f_updated_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 会话主表';
 
 
 -- =================================================================
--- 14. t_fv_ai_messages AI 对话消息表
+-- 14. t_fv_ai_messages AI 会话消息表（新版，trpc-agent-go）
 -- =================================================================
+-- 与旧 conversations.messages 的差异：
+--   - 主键 f_id 改为 UUID 字符串
+--   - f_session_id 改为 UUID 字符串关联 t_fv_ai_sessions.f_id
+--   - 新增 f_token_usage JSON（兼容 SQLite 的 type:json → TEXT）
+--   - 删除 f_tool_name / f_tool_args / f_tool_result（拆到 t_fv_ai_agent_steps）
+-- f_session_id FK 仅在 spec 层承诺，实际由 service 层级联删除（SQLite 默认
+-- foreign_keys=OFF，且 GORM AutoMigrate 不生成 FK 约束）。
 CREATE TABLE `t_fv_ai_messages` (
-  `f_id` bigint unsigned NOT NULL AUTO_INCREMENT,
-  `f_conversation_id` bigint unsigned NOT NULL,
-  `f_role` varchar(20) NOT NULL COMMENT 'system/user/assistant/tool',
+  `f_id` varchar(36) NOT NULL COMMENT 'UUID',
+  `f_session_id` varchar(36) NOT NULL,
+  `f_role` varchar(20) NOT NULL COMMENT 'user/assistant/tool/system',
   `f_content` text NOT NULL,
-  `f_tool_name` varchar(64) DEFAULT NULL,
-  `f_tool_args` text DEFAULT NULL COMMENT 'JSON',
-  `f_tool_result` text DEFAULT NULL,
-  `f_token_count` int DEFAULT NULL,
+  `f_token_usage` json DEFAULT NULL COMMENT 'JSON {prompt_tokens,completion_tokens,total_tokens}',
   `f_created_at` datetime NOT NULL,
   PRIMARY KEY (`f_id`),
-  KEY `idx_conv_time` (`f_conversation_id`, `f_created_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 对话消息';
+  KEY `idx_session_created` (`f_session_id`, `f_created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 会话消息';
 
 
 -- =================================================================
--- 15. t_fv_report_reports 报表缓存表
+-- 15. t_fv_ai_agent_steps Agent 运行步骤表（trpc-agent-go）
+-- =================================================================
+-- 仅追加从不更新；写入前对 f_payload JSON 做敏感字段掩码（design D7：api_key /
+-- password / token / authorization 等替换为 "***"）。
+--
+-- 索引前缀 idx_step_ 与 t_fv_ai_messages 的 idx_session_created 区分（SQLite 索引名
+-- 是库级命名空间，跨表不能同名）。
+--
+-- f_message_id 关联 t_fv_ai_messages.f_id（D14：step ↔ assistant message 关联）；
+-- service 层预生成 assistantMessageID 并通过 ctx 注入，Runner 落 step 时使用同一 ID。
+CREATE TABLE `t_fv_ai_agent_steps` (
+  `f_id` varchar(36) NOT NULL COMMENT 'UUID',
+  `f_session_id` varchar(36) NOT NULL,
+  `f_message_id` varchar(36) NOT NULL COMMENT '关联 assistant message',
+  `f_event_type` varchar(32) NOT NULL COMMENT 'tool_call_started/tool_call_finished/token_usage/step_boundary',
+  `f_tool_name` varchar(64) DEFAULT NULL,
+  `f_payload` json NOT NULL COMMENT 'JSON 事件载荷（已掩码敏感字段）',
+  `f_created_at` datetime NOT NULL,
+  PRIMARY KEY (`f_id`),
+  KEY `idx_step_session_created` (`f_session_id`, `f_created_at`),
+  KEY `idx_step_session` (`f_session_id`),
+  KEY `idx_step_message` (`f_message_id`),
+  KEY `idx_created` (`f_created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent 运行步骤事件流';
+
+
+-- =================================================================
+-- 16. t_fv_report_reports 报表缓存表
 -- =================================================================
 CREATE TABLE `t_fv_report_reports` (
   `f_id` bigint unsigned NOT NULL AUTO_INCREMENT,
@@ -676,32 +711,59 @@ type Portfolio struct {
 ```
 
 
-### 3.9 AIConversation / AIMessage / Report
+### 3.9 Session / Message / AgentStep / Report
+
+> AI 三表（基于 trpc-agent-go）的 Model 草稿照搬 `backend/internal/domain/ai_session.go` 已落地实现。
+> 三个 struct 均**不继承 BaseModel**：BaseModel 用 uint 自增主键 + `gorm.DeletedAt`，与 UUID 字符串主键 + 硬删的设计不兼容。
 
 ```go
-type AIConversation struct {
-    BaseModel
-    UserID       uint   `gorm:"not null;index:idx_user_status_updated,priority:1" json:"user_id"`
-    Title        string `gorm:"size:128;not null" json:"title"`
-    Scene        string `gorm:"size:20;not null;default:chat" json:"scene"`
-    LLMProvider  string `gorm:"size:32;not null" json:"llm_provider"`
-    LLMModel     string `gorm:"size:64;not null" json:"llm_model"`
-    MessageCount int    `gorm:"not null;default:0" json:"message_count"`
-    TotalTokens  int    `gorm:"not null;default:0" json:"total_tokens"`
-    Status       string `gorm:"size:20;not null;default:active;index:idx_user_status_updated,priority:2" json:"status"`
+// AI 三表（trpc-agent-go）
+//
+// FK 仅在 spec 层承诺，实际由 service 层级联删除（SQLite 默认 PRAGMA
+// foreign_keys=OFF 且 GORM AutoMigrate 不生成 SQLite FK 约束）。
+//
+// 索引设计的关键点：
+//   - Session 与 Message 主键都是 UUID 字符串，按业务 ID 查询走主键命中
+//   - Message.idx_session_created (f_session_id, f_created_at)：按会话拉历史升序
+//   - AgentStep 的复合索引前缀 idx_step_ 与 Message 的 idx_session_created 区分
+//     （SQLite 索引名是库级命名空间，跨表不能同名）
+
+type Session struct {
+    ID        string    `gorm:"column:f_id;type:varchar(36);primaryKey" json:"id"`
+    UserID    uint      `gorm:"column:f_user_id;not null;index:idx_user_updated,priority:1" json:"user_id"`
+    Title     string    `gorm:"column:f_title;type:varchar(128);not null;default:''" json:"title"`
+    CreatedAt time.Time `gorm:"column:f_created_at;not null" json:"created_at"`
+    UpdatedAt time.Time `gorm:"column:f_updated_at;not null;index:idx_user_updated,priority:2" json:"updated_at"`
 }
 
-type AIMessage struct {
-    ID             uint      `gorm:"primaryKey" json:"id"`
-    ConversationID uint      `gorm:"not null;index:idx_conv_time,priority:1" json:"conversation_id"`
-    Role           string    `gorm:"size:20;not null" json:"role"`
-    Content        string    `gorm:"type:text;not null" json:"content"`
-    ToolName       string    `gorm:"size:64" json:"tool_name"`
-    ToolArgs       string    `gorm:"type:text" json:"tool_args"`
-    ToolResult     string    `gorm:"type:text" json:"tool_result"`
-    TokenCount     int       `json:"token_count"`
-    CreatedAt      time.Time `gorm:"index:idx_conv_time,priority:2" json:"created_at"`
+func (Session) TableName() string { return "t_fv_ai_sessions" }
+
+type Message struct {
+    ID         string          `gorm:"column:f_id;type:varchar(36);primaryKey" json:"id"`
+    SessionID  string          `gorm:"column:f_session_id;type:varchar(36);not null;index:idx_session_created,priority:1" json:"session_id"`
+    Role       string          `gorm:"column:f_role;type:varchar(20);not null" json:"role"`
+    Content    string          `gorm:"column:f_content;type:text;not null" json:"content"`
+    TokenUsage json.RawMessage `gorm:"column:f_token_usage;type:json" json:"token_usage,omitempty"`
+    CreatedAt  time.Time       `gorm:"column:f_created_at;not null;index:idx_session_created,priority:2" json:"created_at"`
 }
+
+func (Message) TableName() string { return "t_fv_ai_messages" }
+
+// AgentStep Agent 运行时步骤事件。
+//
+// EventType 取值：tool_call_started / tool_call_finished / token_usage / step_boundary
+// Payload 写入前由 service 层对敏感字段做掩码（design.md D7）。
+type AgentStep struct {
+    ID        string          `gorm:"column:f_id;type:varchar(36);primaryKey" json:"id"`
+    SessionID string          `gorm:"column:f_session_id;type:varchar(36);not null;index:idx_step_session_created,priority:1;index:idx_step_session" json:"session_id"`
+    MessageID string          `gorm:"column:f_message_id;type:varchar(36);not null;index:idx_step_message" json:"message_id"`
+    EventType string          `gorm:"column:f_event_type;type:varchar(32);not null" json:"event_type"`
+    ToolName  string          `gorm:"column:f_tool_name;type:varchar(64)" json:"tool_name,omitempty"`
+    Payload   json.RawMessage `gorm:"column:f_payload;type:json" json:"payload"`
+    CreatedAt time.Time       `gorm:"column:f_created_at;not null;index:idx_step_session_created,priority:2;index:idx_created" json:"created_at"`
+}
+
+func (AgentStep) TableName() string { return "t_fv_ai_agent_steps" }
 
 type Report struct {
     ID              uint      `gorm:"primaryKey" json:"id"`
@@ -785,8 +847,10 @@ func AutoMigrate(db *gorm.DB) error {
         &domain.ExchangeRate{},
         &domain.CostLot{},
         &domain.Portfolio{},
-        &domain.AIConversation{},
-        &domain.AIMessage{},
+        // AI 会话/消息/步骤（基于 trpc-agent-go）
+        &domain.Session{},
+        &domain.Message{},
+        &domain.AgentStep{},
         &domain.Report{},
     )
 }
@@ -874,9 +938,12 @@ database:
 | t_fv_core_transactions | ~500 | ~2500 | 平均每周 10 笔 |
 | t_fv_quote_prices | ~10000 | ~50000 | 主要资产每天一条 |
 | t_fv_quote_exchange_rates | ~1000 | ~5000 | 4 币种 × 250 工作日 |
-| t_fv_ai_messages | ~5000 | ~25000 | 每天对话产生 |
+| t_fv_ai_messages | ~5000 | ~25000 | 每天对话产生（user/assistant 两 role） |
+| t_fv_ai_agent_steps | ~50000 | 受 max_steps_size_mb 控制 | tool_call 等 4 类事件，按阈值滚动清理 |
 
 **结论**：5 年单用户数据量 < 100 万行，SQLite 完全够用，单表查询 < 10ms。
+
+`t_fv_ai_agent_steps` 通过 `ai.session.max_steps_size_mb`（默认 100MB，0=不清理）按 `f_created_at` 升序滚动清理，仅删步骤事件，不影响 `t_fv_ai_sessions` / `t_fv_ai_messages`（用户资产）。
 
 ### 7.2 多用户 SaaS 容量（1 万用户）
 
@@ -884,11 +951,13 @@ database:
 |----|---------|
 | t_fv_core_transactions | 2500 万行 |
 | t_fv_ai_messages | 2.5 亿行 |
+| t_fv_ai_agent_steps | 5 亿行（按阈值清理后 << 1 亿） |
 | t_fv_quote_prices | 5000 万行 |
 
 **应对方案**（在 [upgrade-guide.md](./upgrade-guide.md) 中详述）：
 - t_fv_core_transactions 按 f_user_id 哈希分表
 - t_fv_ai_messages 冷数据归档到对象存储
+- t_fv_ai_agent_steps 全部归档到日志数仓（运行时只保留滑动窗口）
 - t_fv_quote_prices 改为时序数据库（TDengine/InfluxDB）
 
 ---

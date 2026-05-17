@@ -1,12 +1,18 @@
 # FinVault（锦仓）架构设计规范
 
-> 文档版本：v2.1（红队复盘定稿）  
+> 文档版本：v2.2（trpc-agent-go 替换定稿）  
 > 创建日期：2026-05-16  
-> 最近更新：2026-05-16  
+> 最近更新：2026-05-17  
 > 状态：已确认
 
-> v2.1 变更摘要：
-> - AI 层第一阶段不自建 Agent 框架，直接用 `go-openai` 原生 Tool Calling，仅预留 `LLMProvider` 接口；Eino/langchaingo 推迟到出现复杂多步推理需求时再引入
+> v2.2 变更摘要（议题 `replace-ai-with-trpc-agent-go`）：
+> - AI 层第一阶段直接采用 `trpc-group/trpc-agent-go` v1.9.x，**不再**自建 LLMProvider 接口或基于 `go-openai` 实现；业务代码 0 SDK 命中，物理隔离边界 D12（仅 `internal/llm/{agent,model,tools,session}/` 4 子包 import SDK）
+> - 新增 3 张 AI 表（`t_fv_ai_sessions` / `t_fv_ai_messages` 新版 / `t_fv_ai_agent_steps`）替换原 `t_fv_ai_conversations` + `t_fv_ai_messages` 旧表
+> - 新增设计决策档：D12 物理隔离 / D13 双 ctx 注入 / D14 step.MessageID 关联 / D15 X-User-Id 强校验 / D16 LLM 不可用降级 / D17 同步路径无需 flush
+> - 7 个 AI 工具按反射 schema 自动生成；新增工具零侵入（一个文件 + bootstrap 装配 1 行）
+> - 启动日志 5 条契约：`ai providers loaded` / `llm provider selected` / `llm tools registered` / `ai session config` / `ai endpoints status`
+
+> v2.1 变更摘要（已被 v2.2 部分覆盖，保留作为演进记录）：
 > - DB 迁移第一阶段只用 GORM AutoMigrate，接 PostgreSQL 时再引入 `golang-migrate`
 > - ID 生成用 `google/uuid`（UUID v7，自带时间序），不再引入 snowflake，留接口预留
 > - 报表导出第一阶段只装 `excelize/v2`，PDF 用前端浏览器打印，`gopdf` 推迟
@@ -41,7 +47,7 @@ FinVault 的核心设计约束：**本地起步，升级改动最小**。
 | 后端 | ORM | `gorm.io/gorm` | 原生支持 SQLite/MySQL/PostgreSQL，切换数据库只需改驱动和 DSN |
 | 后端 | SQLite 驱动 | `glebarez/sqlite` | 纯 Go 驱动，无 CGO，跨平台编译方便 |
 | 后端 | 缓存客户端 | `redis/go-redis/v9` | Go 社区标准 Redis 客户端，支持哨兵/集群 |
-| 后端 | AI 客户端 | `sashabaranov/go-openai` | OpenAI 协议事实标准，原生支持 Tool Calling / 流式 / JSON Mode，覆盖 DeepSeek / GLM / Kimi / 通义千问 / Ollama 等 90% 国内外模型 |
+| 后端 | AI 客户端 | `trpc.group/trpc-go/trpc-agent-go` | 腾讯 trpc 团队主推的 Agent 运行时（v1.9.x），内置 Session / Memory / Tool / Runner 四件套；OpenAI 兼容协议覆盖 DeepSeek / GLM / Kimi / 通义千问 / Ollama 等 90% 国内外模型 |
 | 后端 | 配置管理 | `spf13/viper` | 支持多格式配置，环境变量覆盖，管理多模型 API Key |
 | 后端 | 金额精度 | `shopspring/decimal` | 精确的十进制计算，避免浮点数精度问题 |
 | 后端 | 日志 | `slog`（标准库） | 结构化日志，零依赖，生产环境可桥接到 zap |
@@ -59,8 +65,9 @@ FinVault 的核心设计约束：**本地起步，升级改动最小**。
 
 | 组件 | 原计划 | v2.1 决定 | 触发引入条件 |
 |------|-------|----------|-------------|
-| `cloudwego/eino` | 自建薄 Agent 层 | **暂不引入** | 当真的出现「需要多步推理 + 工具循环 + 复杂编排」的 Agent 场景（例如复杂报表生成 Agent） |
-| `tmc/langchaingo` | 候选 Agent 框架 | **不引入** | 已被 Eino 替代为后续选项 |
+| `cloudwego/eino` | 候选 Agent 框架 | **不选** | trpc-agent-go 已 v1.9.x 稳定可用；Eino 待转正 RC 后可作为 `agent.Runner` 的另一实现备选 |
+| `tmc/langchaingo` | 候选 Agent 框架 | **不引入** | 维护节奏弱于 trpc-agent-go |
+| `sashabaranov/go-openai` | 自研 Provider 客户端 | **不引入** | trpc-agent-go SDK 已封装 OpenAI 兼容协议，业务代码 0 SDK 命中 |
 | `golang-migrate/migrate` | 第一阶段引入 | **推迟** | 接入 PostgreSQL / MySQL / TDSQL 时一并引入 |
 | `bwmarrin/snowflake` | 预留分布式 ID | **不引入** | 由 UUID v7 + 接口预留 `IDGenerator` 替代，分布式时才考虑 |
 | `signintech/gopdf` | PDF 报表导出 | **推迟** | 第一阶段 PDF 用前端 jsPDF / 浏览器打印解决 |
@@ -73,37 +80,43 @@ FinVault 的核心设计约束：**本地起步，升级改动最小**。
 | GoFrame 全家桶 | ORM 自有生态不兼容 GORM，AI 模块缺失，商业化换组件受框架约束 |
 | Hertz（字节） | 社区规模远小于 Gin，参考资料少，外部生态不成熟 |
 | 各厂商 Go Agent SDK | 厂商锁定，与「支持不同大模型」需求冲突 |
-| 第一阶段就上 Eino | YAGNI 原则——`go-openai` 已原生支持 Tool Calling / Streaming / JSON Mode，第一阶段真实需要的能力（Provider 切换 + Tool Calling + 流式输出 + 简单 Memory）全部覆盖；不需要 Multi-Agent / 复杂 Graph 编排 / RAG |
-| 第一阶段就上 langchaingo | 同上，且 langchaingo 维护节奏弱于 Eino，未来若要升级会优先选 Eino |
+| Eino 当下作为 AI 主框架 | 仍在 alpha（v0.9.0-alpha.x），API 不稳定；trpc-agent-go 已 v1.9.x 稳定，文档/社区/迭代更优 |
+| 自研 OpenAI 协议客户端 | trpc-agent-go SDK 已封装 OpenAI 兼容协议 + Tool Calling + Session/Memory；自研维护成本明显更高 |
 
 ### 2.4 AI 层落地决策（重要）
 
-本项目 AI 能力是核心需求（买卖建议、盈亏分析、报表生成等），但**第一阶段不自建 Agent 框架，也不引入 Eino / langchaingo**。
+本项目 AI 能力是核心需求（基金搜索、行情查询、持仓分析、买卖建议、报表生成等），第一阶段直接采用 **`trpc-group/trpc-agent-go` v1.9.x** 作为 Agent 运行时，通过物理隔离 + 接口抽象保证「业务代码 0 SDK 命中」。
 
 **真实业务需要的能力**（已 ✅ / 不需要 ❌）：
 
-- ✅ 多模型 Provider 切换（DeepSeek / GLM / Kimi / 通义千问 / Ollama）
-- ✅ Tool Calling（查持仓、查行情、查历史交易）—— `go-openai` 原生支持
-- ✅ 流式输出 SSE 推送给前端 —— `go-openai` 原生支持
-- ✅ 简单 Memory（最近 N 轮对话）—— 业务层自管理 `[]Message` 即可
-- ❌ Multi-Agent 协作
-- ❌ 复杂 Graph / DAG 编排
-- ❌ RAG（理财知识量不大，直接 Prompt 塞进上下文够用）
+- ✅ 多模型 Provider 切换（DeepSeek / GLM / Kimi / 通义千问 / Ollama）—— 全部走 OpenAI 兼容协议，仅 BaseURL/APIKey/Model 不同
+- ✅ Tool Calling（基金搜索、行情查询、持仓查询、盈亏计算等 7 个工具）—— SDK 内置反射生成 schema
+- ✅ 多轮会话 + 历史窗口（默认 20 条）—— 业务 SessionStore 持久化到 SQLite，每次 Run 灌进 SDK inmemory session
+- ✅ Agent 步骤可观测（tool_call_started / tool_call_finished / token_usage / step_boundary 四类事件落库）
+- ✅ 步骤滚动清理（max_steps_size_mb 阈值，按 created_at 升序删旧）
+- ✅ 跨用户隔离（D13 工具层强制 user_id ctx 注入）
+- ❌ 流式 SSE 推送（首版返回完整响应，下个议题再加）
+- ❌ RAG / 向量库（议题之外）
+- ❌ Multi-Agent 协作 / 复杂 Graph 编排（议题之外）
 
-**结论**：
+**关键设计决策**（详见 [openspec design 档](../openspec/changes/replace-ai-with-trpc-agent-go/design.md)）：
 
-1. 第一阶段 AI 层**只定义 `LLMProvider` 接口 + `OpenAIProvider` 实现**（基于 `go-openai`）
-2. 业务层直接调用 `provider.Chat(ctx, messages, tools)`，不再包一层「薄 Agent」
-3. 多步推理/工具循环逻辑由业务 Service 层显式编写（最多就 ReAct 几十行代码）
-4. 待出现复杂 Agent 场景时，再新增 `EinoProvider` 实现 `LLMProvider` 接口，业务代码不动
+- **D12 物理隔离边界**：`internal/llm/{agent,model,tools,session}/` 四子包是 SDK 仅有的导入点，service / handler / domain / repository 层 0 SDK 命中（通过 `grep` 红线把关）
+- **D13 工具用户隔离**：工具入参 schema **禁止**含 `user_id` 字段；service 层调 Runner 前 `tools.WithUserID(ctx, uid)` 注入 ctx，工具内部强制 `tools.UserIDFromContext` 提取
+- **D14 step ↔ assistant message 关联**：service 层预生成 `assistantMessageID = uuid.NewString()`，通过 `agent.WithAssistantMessageID(ctx, msgID)` 注入；Runner 落 assistant message 与 AgentStep 时使用同一 ID，保证 `step.MessageID == message.ID` 可追溯
+- **D15 X-User-Id 强校验**：AI 路由专用 `requireUserIDFromHeader`，缺失/非法/0 → 401（不走普通业务路由的 fallback=1）
+- **D16 LLM 不可用降级**：`model.NewDefaultModel` 返 error 时仅装 `AISessionHandler`（CRUD 不依赖 Runner），`AIMessageHandler` 不装；`router.go` 条件挂载 `POST /ai/sessions/:id/messages`（404 而非 500）
+- **D17 同步路径无需 flush**：`appendStepSafe` 同步落库无缓冲，HTTP server 10s graceful shutdown 已能让正在执行的 Run() 完成最后一次同步 AppendStep；如未来 Runner 引入异步缓冲再补 flush 接口
 
 **关键场景落地路径**：
 
-- 盈亏分析 → `Service` 层调用 `Provider.ChatWithTools(...)` + 注册财务数据查询 Tool
-- 买卖建议 → `Service` 层调用 `Provider.ChatWithTools(...)` + 行情数据 Tool + 市场分析 Prompt
-- 智能问答 → `Service` 层维护 `[]Message` 上下文 + 调用 `Provider.StreamChat(...)`
-- 周报/月报/年报 → 显式三步 Pipeline：数据采集（Repository）→ 分析（Provider.Chat）→ 模板渲染（excelize/Markdown）
-- 多模型切换 → `LLMRegistry.GetProvider(name)` 按配置/请求参数路由
+- 新建会话 → `POST /api/v1/ai/sessions`（service 层 UUID 生成）
+- 多轮对话 → `POST /api/v1/ai/sessions/:id/messages`（service 层先 Get 校验归属 → 双 ctx + assistant msg id 三注入 → Runner.Run）
+- 历史消息 → `GET /api/v1/ai/sessions/:id/messages`（仅 user/assistant，tool 中间消息由 step 接口提供）
+- 多模型切换 → `cfg.LLM.default` + `cfg.LLM.providers.<name>.{api_key,base_url,model,enabled}`，启动期 `model.NewDefaultModel` 选 default 或字典序 fallback
+- Provider 元信息 → `GET /api/v1/ai/providers` 列出 name / model / is_default / enabled
+
+**未来升级**：换 Agent 框架（如 Eino 转正）只需在 `internal/llm/agent/` 内换 `Runner` 实现 + `internal/llm/model/` 换 SDK 工厂，业务侧零改动。
 
 ## 3. 分层架构
 
@@ -117,13 +130,15 @@ FinVault 的核心设计约束：**本地起步，升级改动最小**。
 │  Asset    │  Analysis │  AI Svc    │   System       │
 ├───────────┴───────────┴────────────┴────────────────┤
 │      抽象层（接口定义，零外部依赖，升级零改动）            │
-│  Repository │ CacheProvider │ LLMProvider │ EventBus │
+│  Repository │ CacheProvider │ agent.Runner │ EventBus│
 │  IDGenerator│ Migrator      │ ReportExporter         │
+│  SessionStore (持久化层)                              │
 ├───────────┬───────────┬────────────┬────────────────┤
-│   GORM    │  go-redis │ go-openai  │  (预留)        │
-│  SQLite   │   本地    │  DeepSeek  │  NATS/Kafka   │
-│  PgSQL    │   单机    │    GLM     │  Eino/Anthropic│
-│  MySQL    │   集群    │  Ollama    │  (按需扩展)    │
+│   GORM    │  go-redis │ trpc-agent │  (预留)        │
+│  SQLite   │   本地    │   -go SDK  │  NATS/Kafka   │
+│  PgSQL    │   单机    │  DeepSeek  │   Eino(后备)  │
+│  MySQL    │   集群    │ GLM/Kimi/  │  (按需扩展)    │
+│           │           │ Qwen/Ollama│                │
 └───────────┴───────────┴────────────┴────────────────┘
 ```
 
@@ -131,20 +146,21 @@ FinVault 的核心设计约束：**本地起步，升级改动最小**。
 
 | 层 | 职责 | 依赖方向 |
 |----|------|---------|
-| Handler 层 | HTTP 请求处理、参数校验、响应序列化 | 依赖 Service 接口 |
-| Service 层 | 业务逻辑编排、事务管理、AI 调用编排（含 Tool Calling 循环） | 依赖 Repository / Cache / LLMProvider 接口 |
+| Handler 层 | HTTP 请求处理、参数校验、响应序列化、X-User-Id 强校验（AI 路由） | 依赖 Service 接口；**0 SDK 命中** |
+| Service 层 | 业务逻辑编排、事务管理、AI 路由前置 ctx 三注入（D13/D14） | 依赖 Repository / Cache / `agent.Runner` 接口；**0 SDK 命中** |
 | Repository 层 | 数据持久化，数据库 CRUD | 依赖 domain 模型，实现 Repository 接口 |
-| AI 适配层 | `LLMProvider` 接口 + `OpenAIProvider` 实现 + Tool 注册表 | 依赖 `go-openai`，对外只暴露 `LLMProvider` 接口 |
+| AI 适配层 | `internal/llm/` 下 4 子包，封装 trpc-agent-go SDK | 仅本层 import SDK，对外暴露 `agent.Runner` / `model.NewDefaultModel` / `session.SessionStore` 三个接口 |
 | Domain 层 | 纯领域模型，结构体定义 | 零外部依赖 |
 
 ### 3.2 依赖规则
 
 - **domain/** 零外部依赖，只有纯 Go 结构体
 - **repository/interfaces.go** 定义接口，不引入 GORM
-- **service/** 只依赖接口（repository / cache / llm / event 等抽象），AI 编排逻辑写在 service 层
-- **handler/** 只依赖 service，不直接操作数据库、缓存或 LLM
-- **llm/openai.go** 是 `go-openai` 的唯一引用点，业务层不得直接 import `go-openai`
-- 具体实现（`gorm/`、`redis/`、`llm/openai/`）通过 `internal/bootstrap/` 包的工厂函数注入，`main.go` 调用 `bootstrap.Wire()` 完成组装
+- **service/** 只依赖接口（repository / cache / `agent.Runner` / event 等抽象），AI 编排逻辑写在 service 层
+- **handler/** 只依赖 service，不直接操作数据库、缓存或 SDK
+- **`internal/llm/{agent,model,tools,session}/`** 是 trpc-agent-go SDK 的**唯一引用点**，业务层（service / handler / domain / repository）禁止 import SDK——CI 红线 `grep -rn "trpc.group/trpc-go/trpc-agent-go" backend/internal/{service,handler,domain,repository}/` 必须 0 命中
+- **bootstrap/** 是装配层，允许 import SDK 子包（仅用于装配，不写业务逻辑）
+- 具体实现（`gorm/`、`redis/`、`llm/agent/runner_trpc.go`）通过 `internal/bootstrap/` 包的工厂函数注入，`main.go` 调用 `bootstrap.Wire()` 完成组装
 
 ## 4. 核心抽象接口
 
@@ -156,7 +172,8 @@ FinVault 的核心设计约束：**本地起步，升级改动最小**。
 |------|------------|-------------|-------------|
 | `Repository`（各领域） | `repository/gorm/*` | 无变化（GORM 跨 DB 无差异） | 接 PostgreSQL / MySQL / TDSQL 时只改 DSN |
 | `CacheProvider` | `cache/local.go`（进程内 sync.Map + TTL） | `cache/redis.go` | 多实例部署或需要持久化缓存 |
-| `LLMProvider` | `llm/openai.go`（基于 go-openai） | `llm/eino.go` / `llm/anthropic.go` | 出现复杂 Multi-Agent / Graph 编排需求 |
+| `agent.Runner` | `llm/agent/runner_trpc.go`（trpc-agent-go SDK 实现） | `llm/agent/runner_eino.go` 等 | 换 Agent 框架（Eino 转正等）；业务侧零改动 |
+| `session.SessionStore` | `llm/session/sqlite_store.go`（SQLite 持久化 3 张 AI 表） | `llm/session/mysql_store.go` 等 | 接生产数据库时只换工厂选择 |
 | `EventBus` | `event/channel.go`（Go channel） | `event/nats.go` / `event/kafka.go` | 跨实例事件广播 |
 | `IDGenerator` | `id/uuidv7.go`（google/uuid） | `id/snowflake.go` | 分布式部署 + 需要更短/纯数字 ID |
 | `Migrator` | `database/automigrate.go`（GORM AutoMigrate） | `database/golang_migrate.go`（双向 SQL） | 接入生产数据库（PostgreSQL/MySQL/TDSQL） |
@@ -268,132 +285,120 @@ func NewCacheProvider(cfg *config.CacheConfig) CacheProvider {
 }
 ```
 
-### 4.3 LLMProvider 抽象（AI 模型层）
+### 4.3 AI 适配层抽象（agent.Runner / model.NewDefaultModel / SessionStore）
 
-第一阶段实现策略：**只定义接口 + 一个基于 `go-openai` 的实现**，业务代码只 import `internal/llm`，永远不直接 import `go-openai`。
+第一阶段实现策略：**`internal/llm/{agent,model,tools,session}/` 4 子包封装 trpc-agent-go SDK，业务代码（service / handler / domain / repository）只 import 这 4 个子包，永远不直接 import SDK**。CI 红线 `grep -rn "trpc.group/trpc-go/trpc-agent-go" backend/internal/{service,handler,domain,repository}/` 必须 0 命中。
+
+#### 抽象 1：业务 Runner 接口（agent.Runner）
 
 ```go
-// internal/llm/provider.go
+// internal/llm/agent/runner.go
 
-type LLMProvider interface {
-    // 基础对话（一次性返回完整回复）
-    Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
-    // 流式对话（SSE 推送到前端）
-    StreamChat(ctx context.Context, req ChatRequest) (<-chan Chunk, error)
-    // 带 Tool Calling 的对话（业务层在 Service 中循环调用直到 finish_reason=stop）
-    ChatWithTools(ctx context.Context, req ChatRequest, tools []Tool) (*ChatResponse, error)
-    // Embeddings（未来 RAG 用，第一阶段可不实现）
-    Embeddings(ctx context.Context, input []string) ([][]float32, error)
-}
-
-// 请求参数
-type ChatRequest struct {
-    Model       string    // 可空，空则用 Provider 默认模型
-    Messages    []Message
-    Temperature float32
-    MaxTokens   int
-    JSONMode    bool      // 强制返回 JSON
-}
-
-// 消息结构（兼容 OpenAI 协议）
-type Message struct {
-    Role       string     `json:"role"`    // system / user / assistant / tool
-    Content    string     `json:"content"`
-    ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-    ToolCallID string     `json:"tool_call_id,omitempty"`
-    Name       string     `json:"name,omitempty"`
-}
-
-type Tool struct {
-    Name        string
-    Description string
-    Parameters  any        // JSON Schema
-    Handler     func(ctx context.Context, args string) (string, error)
-}
-
+// ToolCall 描述 Agent 在一次 turn 内调用过的一个工具的可观测信息。
 type ToolCall struct {
-    ID        string
-    Name      string
-    Arguments string
+    Name         string                 `json:"name"`
+    Arguments    map[string]interface{} `json:"arguments"`
+    StartedAt    time.Time              `json:"started_at"`
+    FinishedAt   time.Time              `json:"finished_at"`
+    Status       string                 `json:"status"` // success / failed / timeout
+    ErrorMessage string                 `json:"error_message,omitempty"`
 }
 
-type ChatResponse struct {
-    Content      string
-    ToolCalls    []ToolCall
-    FinishReason string     // stop / tool_calls / length
-    Usage        TokenUsage
-}
-
-type Chunk struct {
-    Content string `json:"content"`
-    Done    bool   `json:"done"`
-}
-
+// TokenUsage 对应 spec ai-agent-runtime "token 用量被记录" Scenario 的载荷。
 type TokenUsage struct {
-    PromptTokens     int
-    CompletionTokens int
-    TotalTokens      int
+    PromptTokens     int `json:"prompt_tokens"`
+    CompletionTokens int `json:"completion_tokens"`
+    TotalTokens      int `json:"total_tokens"`
+}
+
+// Runner 业务侧 Agent 运行时接口。
+//
+// 业务 Runner 自管 user/assistant 两条消息落库（D12 第 5 步）+ AgentStep
+// 落库（含 D14 message_id 关联），service 层不重复写。
+type Runner interface {
+    Run(ctx context.Context, sessionID string, userMessage string) (
+        assistantMessage string,
+        toolCalls []ToolCall,
+        tokenUsage TokenUsage,
+        err error,
+    )
 }
 ```
 
-基于 `go-openai` 的统一适配实现（覆盖 DeepSeek / GLM / Kimi / 通义千问 / Ollama 等所有 OpenAI 协议兼容模型）：
+实现位于 `agent/runner_trpc.go`，`bootstrap/wire_ai.go` 通过 `agent.NewTRPCRunner(factory, store, historyWindow, logger)` 构造单例。换 Agent 框架（如 Eino 转正）只需新增 `runner_eino.go` 实现 `Runner`，业务侧零改动。
+
+#### 抽象 2：SDK Model 工厂（model.NewDefaultModel）
 
 ```go
-// internal/llm/openai.go
+// internal/llm/model/factory.go
 
-type openaiProvider struct {
-    client       *openai.Client
-    defaultModel string
-}
-
-// DeepSeek、GLM、Kimi、通义千问、Ollama 等都走 OpenAI 兼容协议，只需改 baseURL
-func NewOpenAIProvider(cfg *config.LLMProviderConfig) LLMProvider {
-    oc := openai.DefaultConfig(cfg.APIKey)
-    if cfg.BaseURL != "" {
-        oc.BaseURL = cfg.BaseURL
-    }
-    return &openaiProvider{
-        client:       openai.NewClientWithConfig(oc),
-        defaultModel: cfg.Model,
-    }
-}
+// NewDefaultModel 按 RegistryEntry 配置生成 OpenAI 兼容的 SDK Model。
+//
+// 选择策略：
+//  1. cfg.Default 非空且可用 → 直接使用，info 记 "selected (default)"
+//  2. 否则按 providers map keys 字典序遍历，取第一个可用的，warn 记 "fallback by dictionary order"
+//  3. 全部不可用 → 返回非 nil error（D16 LLM 不可用降级触发点）
+//
+// 可用 = Enabled && APIKey != "" && BaseURL != "" && Model != ""
+func NewDefaultModel(cfg RegistryEntry, logger *slog.Logger) (sdkmodel.Model, string, error)
 ```
 
-多模型注册与运行时路由：
+`RegistryEntry` / `ProviderEntry` 是工厂输入版本（纯 Go 字段）；mapstructure 反序列化版本是 `RegistryConfig` / `ProviderConfig`（含 `*bool Enabled` 三态 + `IsEnabled()` 方法），bootstrap 通过 `cfg.LLM.ToRegistryEntry()` 桥接两者。
+
+#### 抽象 3：会话持久化层（SessionStore）
 
 ```go
-// internal/llm/registry.go
+// internal/llm/session/store.go
 
-type LLMRegistry struct {
-    providers map[string]LLMProvider
-    fallback  string
-}
+type SessionStore interface {
+    // 会话 CRUD（用户隔离由 service 层完成；store 层是受信调用）
+    CreateSession(ctx context.Context, s *domain.Session) error
+    GetSession(ctx context.Context, sessionID string) (*domain.Session, error)
+    UpdateSession(ctx context.Context, s *domain.Session) error
+    DeleteSession(ctx context.Context, sessionID string) error
+    ListSessions(ctx context.Context, opts ListSessionsOptions) ([]domain.Session, int64, error)
 
-// 默认 Provider；调用方也可显式指定 name
-func (r *LLMRegistry) GetProvider(name ...string) LLMProvider {
-    key := r.fallback
-    if len(name) > 0 && name[0] != "" {
-        key = name[0]
-    }
-    return r.providers[key]
+    // 消息：按 created_at 升序拉取最近 N 条（spec "历史窗口生效"）
+    ListMessages(ctx context.Context, sessionID string, limit int) ([]domain.Message, error)
+    AppendMessage(ctx context.Context, m *domain.Message) error
+
+    // 步骤：仅追加从不更新；写入前 mask 敏感字段
+    AppendStep(ctx context.Context, step *domain.AgentStep) error
+
+    // EstimateStepsSize 估算 t_fv_ai_agent_steps 表占用空间（字节），
+    // 用于 ai.session.max_steps_size_mb 滚动清理
+    EstimateStepsSize(ctx context.Context) (int64, error)
 }
 ```
 
-> 业务层 Tool Calling 循环示例（写在 Service 层，不在 llm 层）：
->
-> ```go
-> // internal/service/advisor_service.go（伪代码）
-> for {
->     resp, _ := s.llm.ChatWithTools(ctx, req, tools)
->     if resp.FinishReason != "tool_calls" { return resp.Content, nil }
->     for _, tc := range resp.ToolCalls {
->         result, _ := tools[tc.Name].Handler(ctx, tc.Arguments)
->         req.Messages = append(req.Messages, llm.Message{
->             Role: "tool", ToolCallID: tc.ID, Content: result,
->         })
->     }
-> }
-> ```
+第一阶段实现 `sqlite_store.go`（基于 GORM AutoMigrate 的 3 张 AI 表）；未来接 PostgreSQL/MySQL 时只新增对应实现，business 层零感知。`SessionStore` 上方还可叠 `Cache` 接口（默认 `NoopCache`），后续接 Redis 时只换实现。
+
+#### 多模型路由（无独立 Registry 类型）
+
+trpc-agent-go SDK 已内置 Model 抽象，FinVault **不**自建 LLMRegistry。多模型路由由 `model.NewDefaultModel` 一次性选定（启动期），运行时不再做 per-request 的 provider 切换；如未来需要"按请求参数路由不同 provider"，可在 `agent.Runner` 实现内分发到多个 SDK Model 实例（每个 cfg.Providers entry 各构造一个）。
+
+Provider 元信息暴露给前端：`AIMetaHandler` 直接消费 `cfg.LLM`（`model.RegistryConfig`），按字典序输出 `[]ProviderInfo{name, model, is_default, enabled}`，对应 `GET /api/v1/ai/providers`。
+
+#### Service 层 ctx 三注入（D13 + D14）
+
+```go
+// internal/service/ai_message_service.go (节选)
+func (s *AIMessageService) Send(ctx context.Context, userID uint, sessionID, userMsg string) (*SendResult, error) {
+    // 1. 归属校验先于 Runner.Run
+    sess, err := s.sessionSvc.Get(ctx, userID, sessionID)
+    if err != nil { return nil, err }
+
+    // 2. 双 ctx + D14 第三注入
+    ctx = tools.WithUserID(ctx, userID)                          // D13 工具层 user 隔离（uint）
+    ctx = agent.WithUserID(ctx, fmt.Sprint(userID))              // D12 SDK session.Key 拼接（string）
+    assistantMsgID := uuid.NewString()
+    ctx = agent.WithAssistantMessageID(ctx, assistantMsgID)      // D14 step ↔ assistant message 关联
+
+    // 3. Runner.Run（错误透传，含 50001/50004-50007）
+    assistantText, toolCalls, usage, err := s.runner.Run(ctx, sess.ID, userMsg)
+    // ...
+}
+```
 
 ### 4.4 IDGenerator 抽象（ID 生成）
 
@@ -546,16 +551,32 @@ fin-vault/
 │   │   │   ├── report_service.go   # 报表生成（数据采集→AI 分析→模板渲染）
 │   │   │   ├── chat_service.go     # 智能问答（流式 SSE）
 │   │   │   └── sync_service.go     # 数据同步（行情、净值）
-│   │   ├── llm/                    # AI 适配层（唯一的 go-openai 引用点）
-│   │   │   ├── provider.go         # LLMProvider 接口、Message、Tool、Chunk 等类型
-│   │   │   ├── openai.go           # 基于 go-openai 的 OpenAIProvider 实现
-│   │   │   ├── registry.go         # LLMRegistry：多模型注册与运行时路由
-│   │   │   └── tools/              # AI Tool 注册（供 Service 层挑选注册）
-│   │   │       ├── market_data.go  # 行情查询工具
-│   │   │       ├── holding_query.go# 持仓查询工具
-│   │   │       ├── profit_calc.go  # 盈亏计算工具
-│   │   │       ├── history_query.go# 历史交易查询工具
-│   │   │       └── platform_summary.go # 平台资产汇总工具
+│   │   ├── llm/                    # AI 适配层（唯一的 trpc-agent-go SDK 引用点）
+│   │   │   ├── agent/              # 业务 Runner 接口 + trpc-agent-go 实装
+│   │   │   │   ├── runner.go               # agent.Runner 接口定义（业务侧）
+│   │   │   │   ├── runner_trpc.go          # trpcRunner：SDK Runner 包装
+│   │   │   │   ├── tools_registration.go   # NewToolsetAgentFactory：工具清单装配 + 启动日志
+│   │   │   │   ├── event_handler.go        # SDK Event → AgentStep 落库（含掩码）
+│   │   │   │   ├── error_mapping.go        # SDK error → 业务错误码（50001/50004-50007）
+│   │   │   │   └── context.go              # WithUserID / WithAssistantMessageID（D13/D14 ctx 注入）
+│   │   │   ├── model/              # SDK Model 工厂
+│   │   │   │   ├── factory.go              # NewDefaultModel：default + 字典序 fallback
+│   │   │   │   └── types.go                # RegistryEntry / ProviderEntry / RegistryConfig (mapstructure)
+│   │   │   ├── session/            # 持久化层
+│   │   │   │   ├── store.go                # SessionStore 接口
+│   │   │   │   ├── sqlite_store.go         # SQLite 实现（3 张 AI 表）
+│   │   │   │   ├── cache.go                # Cache 接口 + NoopCache（预留 Redis）
+│   │   │   │   ├── cleanup.go              # max_steps_size_mb 滚动清理
+│   │   │   │   └── mask.go                 # MaskSensitiveJSON（D7 写库前掩码）
+│   │   │   └── tools/              # 7 个 AI 工具 + ctx 隔离 helper
+│   │   │       ├── context.go              # WithUserID / UserIDFromContext (D13)
+│   │   │       ├── search_fund.go          # 基金搜索（公共数据，无需 user_id）
+│   │   │       ├── market_quote.go         # 行情快照（含用户绑定校验）
+│   │   │       ├── market_data.go          # 行情数据查询
+│   │   │       ├── holding_query.go        # 持仓查询（D13 强制 user_id 过滤）
+│   │   │       ├── profit_calc.go          # 盈亏计算
+│   │   │       ├── platform_summary.go     # 平台资产汇总
+│   │   │       └── history_query.go        # 历史交易查询
 │   │   ├── cache/                  # 缓存抽象
 │   │   │   ├── interfaces.go       # CacheProvider 接口
 │   │   │   ├── local.go            # 进程内缓存（本地用，sync.Map + TTL）
@@ -682,102 +703,149 @@ log:
 
 ## 7. AI Agent 能力设计
 
-### 7.1 Agent 工具注册
+### 7.1 工具清单（7 个）
 
-Agent 的核心能力通过 Tool 注册实现，每个 Tool 对应一个具体的数据查询或计算能力：
+Agent 的核心能力通过 Tool 注册实现，每个 Tool 一个文件，入参定义为 Go 结构体 + `json` / `description` tag，运行时反射生成 JSON Schema（D6）。**工具入参 schema 禁止含 `user_id` 字段**（D13），用户身份由 service 层通过 `tools.WithUserID(ctx, uid)` 注入 ctx，工具内部强制 `tools.UserIDFromContext` 提取。
 
-| 工具名称 | 功能 | Agent 调用场景 |
-|---------|------|---------------|
-| market_data | 查询股票/基金实时行情 | 买卖建议、持仓分析 |
-| holding_query | 查询当前持仓明细 | 盈亏分析、持仓建议 |
-| profit_calc | 计算盈亏数据 | 盈亏分析、报表生成 |
-| history_query | 查询历史交易记录 | 交易复盘、报表生成 |
-| platform_summary | 各平台资产汇总 | 全局视图、配置建议 |
+| 工具名称 | 功能 | 用户身份隔离 | 调用场景 |
+|---------|------|-------------|---------|
+| `search_fund` | 按 keyword 模糊匹配基金 code/name，结果上限 20 | 公共数据，**无需** user_id | 用户对话中模糊搜基金 |
+| `market_quote` | 按 symbol（如 `sh000001`）查实时行情快照 | **需要** user_id（资产权属校验） | 上证指数、个股/基金当前价 |
+| `market_data` | 行情数据查询（含历史） | **需要** user_id | 持仓分析、行情对比 |
+| `holding_query` | 查询当前持仓明细 | **需要** user_id（强制 WHERE user_id=?） | 盈亏分析、持仓建议 |
+| `profit_calc` | 计算盈亏数据 | **需要** user_id | 盈亏分析、报表生成 |
+| `platform_summary` | 各平台资产汇总 | **需要** user_id | 全局视图、配置建议 |
+| `history_query` | 查询历史交易记录 | **需要** user_id | 交易复盘、报表生成 |
 
-### 7.2 Agent 场景映射
+### 7.2 工具装配范式（NewToolsetAgentFactory）
 
-| 用户场景 | 实现方式 | 依赖的工具 |
-|---------|---------|-----------|
-| 持仓分析 | ReAct Agent + 财务数据 Tool | holding_query, profit_calc, market_data |
-| 买卖建议 | ReAct Agent + 行情 Tool + 分析 Prompt | market_data, holding_query |
-| 智能问答 | Chain + Memory + RAG | 全部工具 |
-| 周报/月报/年报 | Chain（数据采集→分析→模板渲染） | holding_query, profit_calc, history_query |
-| 持仓建议 | ReAct Agent + 配置分析 Prompt | platform_summary, market_data |
+```go
+// internal/bootstrap/wire_ai.go (节选)
+aiTools := []sdktool.CallableTool{
+    tools.NewSearchFundTool(tools.SearchFundDeps{Asset: repos.Asset}),
+    tools.NewMarketQuoteTool(tools.MarketQuoteDeps{Quote: repos.Quote, Asset: repos.Asset}),
+    tools.NewMarketDataTool(tools.MarketDataDeps{Quote: repos.Quote, Asset: repos.Asset}),
+    tools.NewHoldingQueryTool(tools.HoldingQueryDeps{Holding: repos.Holding, Asset: repos.Asset}),
+    tools.NewProfitCalcTool(tools.ProfitCalcDeps{Holding: repos.Holding, Quote: repos.Quote}),
+    tools.NewPlatformSummaryTool(tools.PlatformSummaryDeps{
+        Holding: repos.Holding, Platform: repos.Platform, Quote: repos.Quote,
+    }),
+    tools.NewHistoryQueryTool(tools.HistoryQueryDeps{Transaction: repos.Transaction}),
+}
 
-### 7.3 SSE 流式对话
+factory := agent.NewToolsetAgentFactory(
+    agent.DefaultAppName, sdkModel, aiTools, logger, defaultAIInstruction,
+    0, // 0 → DefaultMaxToolIterations=10
+)
+runner := agent.NewTRPCRunner(factory, sessionStore, cfg.AI.Session.HistoryWindow, logger)
+```
 
-AI 对话场景必须支持流式输出，实现方案：
+工具构造**只依赖 repository 接口**，无 SDK 命中；启动期一次性构造后被 factory 持有，每次 Run 共享同一组工具实例（无状态）。新增工具的工程动作：
+
+1. 在 `internal/llm/tools/` 新建 `<tool_name>.go`，定义 input struct + Run 函数 + `New<ToolName>Tool(deps)` 构造函数
+2. 在 `bootstrap/wire_ai.go` 的 `buildAITools` 函数末尾追加一行
+3. 单测覆盖：成功 + 失败 + D13 跨用户回归（`*_OtherUser_Returns404Like` 模板）
+
+### 7.3 启动日志契约（5 条）
+
+为方便运维巡检，bootstrap 装配 AI 时按顺序输出 5 条结构化日志：
+
+| # | level | message | 关键字段 | 触发时机 |
+|---|-------|---------|---------|---------|
+| 1 | info | `ai providers loaded` | `configured` (排序后的 provider 名列表) / `default` | bootstrap 装配 AI 入口 |
+| 2 | info/warn | `llm provider selected (default)` 或 `llm default provider unavailable, fallback by dictionary order` | `provider` / `model` | `model.NewDefaultModel` 选定 SDK Model |
+| 3 | info | `llm tools registered` | `tools` (工具名清单) / `count` | `NewToolsetAgentFactory` 构造完毕 |
+| 4 | info | `ai session config` | `history_window` / `max_steps_size_mb` | session 配置可观测 |
+| 5 | info | `ai endpoints status` | `session_enabled` / `message_enabled` (+ 降级路径附 `reason`) | 装配最终状态 |
+
+D16 降级路径下 #2 #3 自然不打（`NewDefaultModel` error 提前返回），#4 #5 仍输出，便于一眼看出降级状态：
 
 ```
-前端 EventSource → Gin SSE Handler → ChatService → LLMProvider.StreamChat() → go-openai 流式调用
+WARN  AI message endpoint disabled (D16 degrade)  reason=...
+INFO  ai session config                            history_window=20  max_steps_size_mb=100
+INFO  ai endpoints status                          session_enabled=true  message_enabled=false  reason=...
 ```
 
-Gin SSE 实现要点：
-- 设置 `Content-Type: text/event-stream`
-- 设置 `Cache-Control: no-cache` 和 `Connection: keep-alive`
-- 使用 `c.Stream()` 方法持续推送 Chunk
+### 7.4 SSE 流式对话（推迟）
+
+第一版返回完整响应（`POST /api/v1/ai/sessions/:id/messages` 同步返回 assistant_message + tool_calls + token_usage），SSE 流式输出留待下个议题。trpc-agent-go SDK 已支持流式接口，扩展点位于 `agent/runner_trpc.go`。
 
 ## 8. 依赖组装方式
 
-所有依赖在 `internal/bootstrap/wire.go` 中通过显式组装（手动依赖注入），第一阶段不使用 DI 框架。`main.go` 只负责加载配置 + 调 `bootstrap.Wire(cfg)` + 启动 HTTP 服务：
+所有依赖在 `internal/bootstrap/` 中通过显式组装（手动依赖注入），第一阶段不使用 DI 框架。`main.go` 只负责加载配置 + 调 `bootstrap.Wire(cfg)` + 启动 HTTP 服务：
 
 ```go
-// cmd/server/main.go
+// cmd/api/main.go
 func main() {
-    cfg := config.Load("configs/local.yaml")
-    app, cleanup, err := bootstrap.Wire(cfg)
+    cfg, err := bootstrap.LoadConfig("configs/config.yaml")
     if err != nil { log.Fatal(err) }
-    defer cleanup()
-    app.Run()
+    app, err := bootstrap.Wire(cfg)
+    if err != nil { log.Fatal(err) }
+    defer app.Close()
+    r := bootstrap.RegisterRoutes(app)
+    // ... HTTP server start with 10s graceful shutdown
 }
 ```
 
 ```go
-// internal/bootstrap/wire.go（第一阶段手写，未来改造为 Wire ProviderSet）
+// internal/bootstrap/wire.go（核心装配，节选）
 
-func Wire(cfg *config.Config) (*App, func(), error) {
-    // 1. 基础设施
-    db := database.NewDB(&cfg.Database)
-    migrator := database.NewAutoMigrator(db)
-    _ = migrator.Up(context.Background())
+func Wire(cfg *Config) (*App, error) {
+    // 1. DB / Cache
+    db, _ := NewDB(cfg.Database)
+    cacheProv := NewCache(cfg.Cache)
 
-    cacheProvider := cache.NewCacheProvider(&cfg.Cache)
-    llmRegistry := llm.NewRegistry(&cfg.LLM)
-    eventBus := event.NewChannelBus()
-    idGen := id.NewUUIDv7Generator()
+    // 2. Repositories（GORM 实现）
+    repos := &repository.Repositories{
+        UoW:         gormrepo.NewUnitOfWork(db),
+        User:        gormrepo.NewUserRepository(db),
+        // ... Asset / Holding / Transaction / Quote / Rate 等
+    }
 
-    // 2. Repository（注入 DB）
-    holdingRepo := gormRepo.NewHoldingRepo(db)
-    transactionRepo := gormRepo.NewTransactionRepo(db)
-    reportRepo := gormRepo.NewReportRepo(db)
+    // 3. AI 装配（拆到 wire_ai.go，含 D16 降级路径）
+    sessionStore := session.NewSQLiteStore(db, cfg.AI.Session.HistoryWindow)
+    aiSessionH, aiMessageH := wireAI(cfg, repos, sessionStore, slog.Default())
 
-    // 3. AI Tool 注册（依赖 Repo，供 Service 挑选）
-    toolRegistry := tools.NewRegistry(holdingRepo, transactionRepo /* ... */)
+    // 4. PlatformAPI Aggregator（行情）+ Services + Handlers + Cron 装配
+    // ... 略
 
-    // 4. Service（注入 Repository + Cache + LLM + Tools）
-    assetSvc := service.NewAssetService(holdingRepo, transactionRepo, cacheProvider, idGen)
-    analysisSvc := service.NewAnalysisService(holdingRepo, transactionRepo, cacheProvider, llmRegistry, toolRegistry)
-    advisorSvc := service.NewAdvisorService(holdingRepo, llmRegistry, toolRegistry)
-    reportSvc := service.NewReportService(reportRepo, holdingRepo, llmRegistry, excelExporter, mdExporter)
-    chatSvc := service.NewChatService(llmRegistry, toolRegistry)
+    return &App{
+        Cfg: cfg, DB: db, Cache: cacheProv, Repos: repos,
+        Aggregator: aggregator, Cron: cm,
+        Handlers: &Handlers{
+            Meta: ..., Asset: ..., /* 业务 handlers */
+            AISession: aiSessionH,
+            AIMessage: aiMessageH, // D16 降级路径下为 nil
+            AIMeta:    handler.NewAIMetaHandler(cfg.LLM),
+        },
+    }, nil
+}
+```
 
-    // 5. Handler（注入 Service）
-    h := handler.New(assetSvc, analysisSvc, advisorSvc, reportSvc, chatSvc)
+```go
+// internal/bootstrap/router.go（条件挂载，节选）
 
-    // 6. 路由
-    r := gin.Default()
-    h.RegisterRoutes(r)
+func RegisterRoutes(app *App) *gin.Engine {
+    r := gin.New()
+    // ... 中间件链
+    v1 := r.Group("/api/v1")
+    h := app.Handlers
+    h.Meta.Register(v1); h.Asset.Register(v1); /* ... 业务路由 */
 
-    cleanup := func() { /* 关闭 db / cache / eventbus 等 */ }
-    return &App{Engine: r, Cfg: cfg}, cleanup, nil
+    if h.AISession != nil { h.AISession.Register(v1) }
+    if h.AIMessage != nil { h.AIMessage.Register(v1) } // D16: 降级时跳过 POST /messages
+    if h.AIMeta    != nil { h.AIMeta.Register(v1) }
+    return r
 }
 ```
 
 这种显式组装的好处：
+
 - 依赖关系一目了然
 - 替换任何组件只改这一处
 - 不需要反射、不需要代码生成
 - 编译期就能发现依赖错误
+- AI 装配单独拆到 `wire_ai.go`，便于测试 + 隔离 D16 降级逻辑
 
 **未来升级到 Wire**：把 `bootstrap/wire.go` 拆为多个 ProviderSet（`InfraSet` / `RepoSet` / `LLMSet` / `ServiceSet` / `HandlerSet`），用 `wire.Build(...)` 自动生成 `wire_gen.go` 即可，业务代码零改动。触发条件：`bootstrap/wire.go` 超过 200 行或组件数超过 30 个。
 
