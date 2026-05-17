@@ -7,11 +7,28 @@
 
 ## 2. 数据模型 & migration
 
-- [ ] 2.1 在 `backend/internal/domain/` 新增 `Session` / `Message` / `AgentStep` 结构体
-- [ ] 2.2 新建 migration 文件 `0xx_create_ai_sessions.sql`：建 `ai_sessions` 表（含 `id` UUID PK / `user_id` / `title` / `created_at` / `updated_at` 索引）
-- [ ] 2.3 同 migration：建 `ai_messages` 表（`id` / `session_id` FK / `role` / `content` / `token_usage` JSON / `created_at` 索引）
-- [ ] 2.4 同 migration：建 `ai_agent_steps` 表（`id` / `session_id` FK / `message_id` FK / `event_type` / `tool_name` / `payload` JSON / `created_at` 索引）
-- [ ] 2.5 本地跑 migration、检查表结构正确
+> **机制说明**：项目使用 GORM AutoMigrate（`backend/internal/repository/gorm/automigrate.go`），无 SQL 迁移文件机制。本议题"建表"= 新增 domain struct + 加入 AutoMigrate 列表；"删表"= 删除 domain struct + 从 AutoMigrate 列表移除（不需要 DROP TABLE 脚本，按 design.md "Migration Plan" 第 5 条本议题不做向下兼容）。
+>
+> **范围说明**：本议题用户已确认无老 AI 数据需要兼容，故 §2 阶段同时完成"建新 AI 三表"与"删旧 AI 模块（AIConversation / AIMessage 及其 service / handler / wire）"，让出 `t_fv_ai_messages` 表名给新 `Message` 实体，避免命名冲突。原议题 §6/§7 中相关删除子项已合并到此处，不重复执行。
+
+### 建新
+
+- [ ] 2.1 在 `backend/internal/domain/` 新增 `Session` / `Message` / `AgentStep` 三个 struct（均不继承 `BaseModel`，因主键为 UUID 字符串列；按 naming-conventions skill 规范：每个字段显式 `column:` tag、显式实现 `TableName()`，详见 design.md D9）
+- [ ] 2.2 在 `backend/internal/repository/gorm/automigrate.go` 的 AutoMigrate 列表追加 `*domain.Session`（建表 `t_fv_ai_sessions`：`f_id` varchar(36) PK / `f_user_id` / `f_title` / `f_created_at` / `f_updated_at` + 索引 `idx_user_updated(f_user_id,f_updated_at)`）
+- [ ] 2.3 同列表追加 `*domain.Message`（建表 `t_fv_ai_messages`：`f_id` / `f_session_id` FK→`t_fv_ai_sessions.f_id` / `f_role` / `f_content` / `f_token_usage` JSON / `f_created_at` + 索引 `idx_session_created(f_session_id,f_created_at)`）
+- [ ] 2.4 同列表追加 `*domain.AgentStep`（建表 `t_fv_ai_agent_steps`：`f_id` / `f_session_id` FK→`t_fv_ai_sessions.f_id` / `f_message_id` FK→`t_fv_ai_messages.f_id` / `f_event_type` / `f_tool_name` / `f_payload` JSON / `f_created_at` + 索引 `idx_session_created(f_session_id,f_created_at)`、`idx_created`）
+- [ ] 2.5 本地启动 `go run ./cmd/finvault` 触发 AutoMigrate，用 `sqlite3 data/finvault.db ".schema t_fv_ai_sessions"` / `".schema t_fv_ai_messages"` / `".schema t_fv_ai_agent_steps"` 核对字段类型、索引、外键完整
+
+### 删旧（本议题用户已确认无老 AI 数据需要兼容）
+
+- [ ] 2.6 在 `backend/internal/domain/ai_report.go` 中**精确删除** `AIConversation` 与 `AIMessage` 两个 struct 及其 `TableName()` 方法（保留同文件内的 `Report` struct！建议拆分文件：旧 AI 部分整体删除，`Report` 留在原文件或挪到 `ai_report.go` 重命名为 `report.go`，dev 自决最干净的拆法）
+- [ ] 2.7 删除 `backend/internal/repository/gorm/ai_chat_repo.go`（一体仓储实现）；从 `backend/internal/repository/gorm/automigrate.go` 移除 `&domain.AIConversation{}` / `&domain.AIMessage{}` 两个 entry；删除 `backend/internal/repository/interfaces.go` 中 `AIConversationRepository` 接口与 `Repos.AIConversation` 字段；同步从 `backend/internal/testutil/mock_repos.go` 删除 `MockAIConversationRepo` 整段
+- [ ] 2.8 删除 `backend/internal/service/chat_service.go` / `advisor_service.go` / `analysis_service.go` / `ai_services_test.go` 四个文件（确认这三个 service 仅承载旧 AI 逻辑，不含可独立保留的非 AI 业务；如发现可独立保留逻辑，**先回报架构师**，不擅自决策）
+- [ ] 2.9 删除 `backend/internal/handler/chat_handler.go` / `advisor_handler.go` / `analysis_handler.go` 三个 handler；从 `backend/internal/bootstrap/wire.go` 删除 `Chat` / `Advisor` / `Analysis` handler 字段、`chatSvc` / `advisorSvc` / `analysisSvc` 三处装配、`repos.AIConversation` 注入、以及 router 上 `/api/v1/ai/chat` 等旧 AI 路由（保留 `AIMeta` handler 与 `GET /api/v1/ai/providers` 类元信息接口，那是新 AI 仍要用的）
+
+### 收尾
+
+- [ ] 2.10 `go vet ./...` + `go build ./...` + `go test ./...` 全绿；`pkg/errs/errs.go` 中 `ErrAIConversationNotFound`（错误码 50001）暂不删，留至 §7.1 自研 Provider 退场时一并评估；`pkg/utils/response/response.go` 引用同步处理
 
 ## 3. 包结构 & 接口抽象
 
@@ -52,21 +69,23 @@
 
 ## 7. Service 层
 
-- [ ] 7.1 删除 `backend/internal/llm/openai_provider.go`、`registry.go`、`registry_test.go`、`provider.go`、`fake_provider.go`、`config.go`（自研 Provider 整体退场）
-- [ ] 7.2 删除/重写 `backend/internal/service/ai_services.go`、`ai_services_test.go`
-- [ ] 7.3 新建 `service/ai_session_service.go`：会话 CRUD、用户隔离校验
-- [ ] 7.4 新建 `service/ai_message_service.go`：调用 `Runner.Run`，落 user/assistant 消息，串起 step 事件
-- [ ] 7.5 在 service 层禁止 import `trpc-agent-go`（用 lint 规则或 review 把关）
-- [ ] 7.6 service 单测：用 mock Runner + in-memory store
+> **范围调整**：旧 ChatService / AdvisorService / AnalysisService（基于自研 Provider）已在 §2.8 删除，本节只剩"自研 Provider 文件退场 + 新 Service 新建"。
+
+- [ ] 7.1 删除 `backend/internal/llm/openai_provider.go`、`registry.go`、`registry_test.go`、`provider.go`、`fake_provider.go`、`config.go`（自研 Provider 整体退场）；同步评估并按需删除 `pkg/errs/errs.go` 中已无引用的旧 AI 错误码（如 `ErrAIConversationNotFound` / `ErrAIRequestFailed` 等）及 `response.go` 引用
+- [ ] 7.2 新建 `service/ai_session_service.go`：会话 CRUD、用户隔离校验
+- [ ] 7.3 新建 `service/ai_message_service.go`：调用 `Runner.Run`，落 user/assistant 消息，串起 step 事件
+- [ ] 7.4 在 service 层禁止 import `trpc-agent-go`（用 lint 规则或 review 把关）
+- [ ] 7.5 service 单测：用 mock Runner + in-memory store
 
 ## 8. Handler & 路由
 
-- [ ] 8.1 删除旧的 `POST /api/v1/ai/chat` 路由与 handler
-- [ ] 8.2 新增 `handler/ai_session_handler.go`：`POST/GET/DELETE /api/v1/ai/sessions`、`GET /api/v1/ai/sessions/{id}/messages`
-- [ ] 8.3 新增 `handler/ai_message_handler.go`：`POST /api/v1/ai/sessions/{id}/messages`，响应体含 `tool_calls` 数组
-- [ ] 8.4 新增 `GET /api/v1/ai/providers`：列所有可用 Provider
-- [ ] 8.5 路由统一挂在已有的 `auth` 中间件下，未登录返回 401
-- [ ] 8.6 e2e：用 `httptest` 跑通 5 步流程（建会话 → 多轮 → search_fund → market_quote → 删会话）
+> **范围调整**：旧 `chat_handler.go` / `advisor_handler.go` / `analysis_handler.go` 与 `/api/v1/ai/chat` 等旧路由已在 §2.9 删除，本节只新增。
+
+- [ ] 8.1 新增 `handler/ai_session_handler.go`：`POST/GET/DELETE /api/v1/ai/sessions`、`GET /api/v1/ai/sessions/{id}/messages`
+- [ ] 8.2 新增 `handler/ai_message_handler.go`：`POST /api/v1/ai/sessions/{id}/messages`，响应体含 `tool_calls` 数组
+- [ ] 8.3 新增 `GET /api/v1/ai/providers`：列所有可用 Provider（如已存在 `AIMetaHandler` 提供该路由，则在新 Runner 装配后接管即可，不重复实现）
+- [ ] 8.4 路由统一挂在已有的 `auth` 中间件下，未登录返回 401
+- [ ] 8.5 e2e：用 `httptest` 跑通 5 步流程（建会话 → 多轮 → search_fund → market_quote → 删会话）
 
 ## 9. Bootstrap & 装配
 

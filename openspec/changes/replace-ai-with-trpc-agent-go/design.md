@@ -65,7 +65,7 @@
 
 **选择**：
 
-- 持久化层：3 张表（`ai_sessions` / `ai_messages` / `ai_agent_steps`）落 SQLite。
+- 持久化层：3 张表（`t_fv_ai_sessions` / `t_fv_ai_messages` / `t_fv_ai_agent_steps`）落 SQLite。
 - 业务层定义 `SessionStore` 接口；当前唯一实现是 `SQLiteSessionStore`。
 - 在 `SessionStore` 上方插一个可选 `Cache` 接口（默认 `NoopCache`），后续接 Redis 时只换实现。
 
@@ -78,8 +78,8 @@
 **选择**：
 
 - 短期上下文：`ai.session.history_window`（默认 20 条）控制送给模型的消息数。
-- 长期容量：`ai.session.max_steps_size_mb`（默认 100MB，0 = 不清理）控制 `ai_agent_steps` 表大小。
-- 清理只针对 `ai_agent_steps`，不影响用户消息（避免破坏对话连续性）。
+- 长期容量：`ai.session.max_steps_size_mb`（默认 100MB，0 = 不清理）控制 `t_fv_ai_agent_steps` 表大小。
+- 清理只针对 `t_fv_ai_agent_steps`，不影响用户消息（避免破坏对话连续性）。
 
 **理由**：消息表是用户资产不可丢；step 表是审计日志可丢。两套阈值分开管理。
 
@@ -119,6 +119,54 @@ backend/internal/llm/
 ```
 
 业务代码（service / handler）只 import `agent` 与 `session` 两个包，**绝不直接 import trpc-agent-go**。
+
+### D9：会话主键采用 UUID 字符串列（`varchar(36)`）
+
+**选择**：
+
+- `t_fv_ai_sessions.f_id` 类型：`varchar(36)`，存 RFC 4122 UUID 标准串（带连字符），由 `google/uuid` 在 service 层生成。
+- `t_fv_ai_messages.f_id` / `t_fv_ai_agent_steps.f_id` 同样使用 `varchar(36)` UUID，便于跨表关联与日志查询。
+- 外键 `f_session_id` / `f_message_id` 同为 `varchar(36)`。
+- domain struct **不继承** `domain.BaseModel`（后者是 `uint autoIncrement`），需自定义 `f_id` 字段并显式声明 `gorm:"column:f_id;primaryKey;type:varchar(36)"`。
+
+**理由**：
+
+- 跨 SQLite / PG / MySQL 兼容（PG 有 native UUID，但 `varchar(36)` 是三家共同语义最稳的选择）。
+- spec.md 明确要求 `session_id` 为 UUID 字符串（API 层直接返回不做转换）。
+- 与现有 `BaseModel` 的 `uint autoIncrement` 路线分流是必须的；为此 ai-session 三张表是 fin-vault 命名规范中**唯一允许 `f_id` 非 `bigint` 的例外**，该例外由本议题 design.md D9 显式背书，不破坏 naming-conventions skill 的全局规则。
+
+**备选**：
+
+- `bigint` 自增 + 业务 UUID 单独列：被否，多一个列徒增心智成本。
+- PG 原生 `uuid` 类型：被否，SQLite 没对应类型，跨库不一致。
+
+### D10：旧 AI 模块（自研 Provider 配套）在 §2 阶段一并删除
+
+**选择**：
+
+本议题 §2 阶段同时完成"建新 AI 三表"与"删旧 AI 模块"，删除范围：
+
+- domain：`ai_report.go` 中 `AIConversation` / `AIMessage` 两个 struct（保留 `Report`）
+- repository：`gorm/ai_chat_repo.go` 整文件、`interfaces.go` 中 `AIConversationRepository` 接口与 `Repos.AIConversation` 字段、`gorm/automigrate.go` 中两个 entry
+- service：`chat_service.go` / `advisor_service.go` / `analysis_service.go` / `ai_services_test.go`
+- handler：`chat_handler.go` / `advisor_handler.go` / `analysis_handler.go`
+- bootstrap：`wire.go` 中 `Chat` / `Advisor` / `Analysis` handler / svc 装配 + 路由
+- testutil：`mock_repos.go` 中 `MockAIConversationRepo`
+
+**理由**：
+
+- 用户已确认无老 AI 数据需要兼容，没有"双轨过渡期"需求。
+- 旧 AI 模块的 `t_fv_ai_messages` 表名与本议题新表强冲突，必须先让出名字；不前置删除将被迫使用 `_v2_` 等丑陋前缀，违反 naming-conventions。
+- 把"删旧"集中在 §2 一次完成，避免 §6/§7 反复触碰同一处代码，降低 review 噪音。
+
+**范围调整**：
+
+原 tasks.md §7.1 / §7.2 / §8.1 中"删除 ChatService 等"挪入 §2.6～§2.9，§7/§8 仅保留"自研 Provider 文件退场 + 新代码新建"两类。详见 tasks.md 当前版本。
+
+**备选**：
+
+- 双轨保留旧 AI 直至 §7 再删（被否：表名冲突无法绕开）。
+- 用 `_v2_` 等前缀做新表（被否：长期债，违反命名规范且 §6/§7 还得回头清理）。
 
 ## Risks / Trade-offs
 

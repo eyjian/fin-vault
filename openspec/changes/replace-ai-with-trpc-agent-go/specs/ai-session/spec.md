@@ -7,8 +7,8 @@
 #### Scenario: 用户新建空会话
 
 - **WHEN** 已认证用户调用 `POST /api/v1/ai/sessions`，请求体可为空
-- **THEN** 系统返回 `201 Created`，响应体包含 `session_id`（UUID）、`title`（缺省为空字符串）、`created_at`
-- **AND** 数据库表 `ai_sessions` 新增一行，`user_id` = 当前用户 ID
+- **THEN** 系统返回 `201 Created`，响应体包含 `session_id`（UUID 字符串，长度 36）、`title`（缺省为空字符串）、`created_at`
+- **AND** 数据库表 `t_fv_ai_sessions` 新增一行，`f_user_id` = 当前用户 ID
 
 #### Scenario: 未登录用户被拒绝
 
@@ -18,12 +18,12 @@
 
 ### Requirement: 列出会话
 
-系统 SHALL 允许用户列出自己的全部会话，按 `updated_at` 倒序，支持分页。
+系统 SHALL 允许用户列出自己的全部会话，按 `f_updated_at` 倒序，支持分页。
 
 #### Scenario: 列表只返回当前用户的会话
 
 - **WHEN** 用户 A 调用 `GET /api/v1/ai/sessions?page=1&page_size=20`
-- **THEN** 响应只包含 `user_id` = A 的会话
+- **THEN** 响应只包含 `f_user_id` = A 的会话
 - **AND** 不出现其他用户的任何记录
 
 #### Scenario: 分页生效
@@ -33,13 +33,13 @@
 
 ### Requirement: 删除会话
 
-系统 SHALL 允许用户删除自己的会话，删除时级联清理 `ai_messages` 与 `ai_agent_steps`。
+系统 SHALL 允许用户删除自己的会话，删除时级联清理 `t_fv_ai_messages` 与 `t_fv_ai_agent_steps`。
 
 #### Scenario: 删除自有会话
 
 - **WHEN** 用户调用 `DELETE /api/v1/ai/sessions/{id}` 且会话归属本人
 - **THEN** 系统返回 `204 No Content`
-- **AND** `ai_sessions` / `ai_messages` / `ai_agent_steps` 中所有 `session_id = id` 的行均被删除
+- **AND** `t_fv_ai_sessions` / `t_fv_ai_messages` / `t_fv_ai_agent_steps` 中所有 `f_session_id = id` 的行均被删除
 
 #### Scenario: 拒绝删除他人会话
 
@@ -54,7 +54,7 @@
 
 - **WHEN** 用户在会话 S 内先后发送 "我有哪些基金？" 和 "其中哪只收益最高？"
 - **THEN** 第二次请求时 Agent 必须能基于第一轮结果作答，无需重复说明"哪些基金"
-- **AND** `ai_messages` 表新增 4 行（2 条 user + 2 条 assistant），均带 `session_id = S`
+- **AND** `t_fv_ai_messages` 表新增 4 行（2 条 user + 2 条 assistant），均带 `f_session_id = S`
 
 #### Scenario: 历史窗口生效
 
@@ -64,7 +64,7 @@
 
 ### Requirement: 拉取会话历史消息
 
-系统 SHALL 允许用户拉取指定会话的全部消息，按 `created_at` 升序。
+系统 SHALL 允许用户拉取指定会话的全部消息，按 `f_created_at` 升序。
 
 #### Scenario: 时间线展示
 
@@ -74,11 +74,11 @@
 
 ### Requirement: 滚动清理超额会话步骤
 
-系统 SHALL 按配置 `ai.session.max_steps_size_mb` 监控 `ai_agent_steps` 表占用空间，超过阈值时按 `created_at` 升序删除最旧记录直至低于阈值。
+系统 SHALL 按配置 `ai.session.max_steps_size_mb` 监控 `t_fv_ai_agent_steps` 表占用空间，超过阈值时按 `f_created_at` 升序删除最旧记录直至低于阈值。
 
 #### Scenario: 阈值生效
 
-- **WHEN** `max_steps_size_mb = 100` 且当前 `ai_agent_steps` 占用 105 MB
+- **WHEN** `max_steps_size_mb = 100` 且当前 `t_fv_ai_agent_steps` 占用 105 MB
 - **THEN** 系统在下次写入触发或定时任务运行时删除最旧记录，直至占用 ≤ 100 MB
 
 #### Scenario: 配置为 0 表示不清理
@@ -89,4 +89,4 @@
 #### Scenario: 清理不影响用户消息
 
 - **WHEN** 清理任务运行
-- **THEN** 仅 `ai_agent_steps` 表受影响，`ai_sessions` / `ai_messages` 不被删除
+- **THEN** 仅 `t_fv_ai_agent_steps` 表受影响，`t_fv_ai_sessions` / `t_fv_ai_messages` 不被删除
