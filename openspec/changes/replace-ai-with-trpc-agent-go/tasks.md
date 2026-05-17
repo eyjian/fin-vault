@@ -16,6 +16,7 @@
 ## 3. 包结构 & 接口抽象
 
 - [ ] 3.1 新建目录 `backend/internal/llm/agent/`、`model/`、`session/`，按 design D8 落地
+- [ ] 3.1.1 删除 backend/internal/llm/trpc_agent_placeholder.go（§1.1 临时占位文件，§3 真实代码 import trpc-agent-go 子包后失去作用）
 - [ ] 3.2 在 `agent/runner.go` 定义业务侧 `Runner` 接口：`Run(ctx, sessionID, userMsg) (assistantMsg, []ToolCall, TokenUsage, error)`
 - [ ] 3.3 在 `session/store.go` 定义 `SessionStore` 接口（CRUD + ListMessages + AppendMessage + AppendStep + EstimateStepsSize）
 - [ ] 3.4 在 `session/cache.go` 定义 `Cache` 接口与 `NoopCache` 默认实现（预留 Redis 接入点）
