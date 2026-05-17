@@ -58,6 +58,12 @@ llm:
       model: "qwen2.5:7b"
       timeout_sec: 120
 
+# AI 会话与运行时（基于 trpc-agent-go）
+ai:
+  session:
+    max_steps_size_mb: 100   # SQLite agent_steps 表估算上限（MB），0=不清理
+    history_window: 20       # 单次推理拼接的历史消息条数上限
+
 # 行情数据源
 quote:
   refresh_interval: 5m

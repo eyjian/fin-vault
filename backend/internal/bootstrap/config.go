@@ -34,6 +34,7 @@ type Config struct {
 	Auth     AuthConfig         `mapstructure:"auth"`
 	Security SecurityConfig     `mapstructure:"security"`
 	LLM      llm.RegistryConfig `mapstructure:"llm"`
+	AI       AIConfig           `mapstructure:"ai"`
 	Quote    QuoteConfig        `mapstructure:"quote"`
 	Cron     CronConfig         `mapstructure:"cron"`
 	JWT      JWTConfig          `mapstructure:"jwt"`
@@ -102,6 +103,23 @@ type AuthConfig struct {
 // SecurityConfig 安全配置（如 API Key/Secret 加密用）。
 type SecurityConfig struct {
 	EncryptionKey string `mapstructure:"encryption_key"`
+}
+
+// AIConfig AI 模块配置（基于 trpc-agent-go 的会话与运行时）。
+//
+// LLMConfig（多 Provider 路由）由 internal/llm 包内的 RegistryConfig 提供，
+// 这里只承载 trpc-agent-go 引入后新增的会话/运行时层配置项。
+type AIConfig struct {
+	Session SessionConfig `mapstructure:"session"`
+}
+
+// SessionConfig AI 会话相关配置。
+//
+//   - MaxStepsSizeMB：ai_agent_steps 表大小估算上限（MB），0 = 不清理。
+//   - HistoryWindow ：单次推理拼接的历史消息条数上限，必须 > 0。
+type SessionConfig struct {
+	MaxStepsSizeMB int `mapstructure:"max_steps_size_mb"`
+	HistoryWindow  int `mapstructure:"history_window"`
 }
 
 // QuoteConfig 行情拉取配置。
@@ -178,6 +196,15 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.Auth.DefaultUserID = 1
 	}
 
+	// AI 会话配置校验：max_steps_size_mb 允许 0（=不清理），不允许负值；
+	// history_window 必须 > 0，避免推理时拼不到历史消息。
+	if cfg.AI.Session.MaxStepsSizeMB < 0 {
+		return nil, fmt.Errorf("ai.session.max_steps_size_mb must be >= 0, got %d", cfg.AI.Session.MaxStepsSizeMB)
+	}
+	if cfg.AI.Session.HistoryWindow <= 0 {
+		return nil, fmt.Errorf("ai.session.history_window must be > 0, got %d", cfg.AI.Session.HistoryWindow)
+	}
+
 	return cfg, nil
 }
 
@@ -213,6 +240,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.default_user_id", 1)
 
 	v.SetDefault("llm.default", "deepseek")
+
+	v.SetDefault("ai.session.max_steps_size_mb", 100)
+	v.SetDefault("ai.session.history_window", 20)
 
 	v.SetDefault("quote.source_priority", []string{"api_eastmoney", "api_sina", "api_tencent"})
 	v.SetDefault("quote.http_timeout_sec", 5)
