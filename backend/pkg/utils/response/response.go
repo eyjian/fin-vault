@@ -152,7 +152,7 @@ func httpStatus(code int) int {
 		code == errs.ErrPlatformNotFound.Code,
 		code == errs.ErrPriceQuoteNotFound.Code,
 		code == errs.ErrExchangeRateNotFound.Code,
-		code == errs.ErrAIConversationNotFound.Code:
+		code == errs.ErrAISessionNotFound.Code:
 		return http.StatusNotFound
 	case code == errs.ErrConflict.Code,
 		code == errs.ErrAssetDuplicated.Code,

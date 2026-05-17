@@ -9,7 +9,6 @@ import (
 
 	"github.com/eyjian/fin-vault/backend/internal/cache"
 	"github.com/eyjian/fin-vault/backend/internal/handler"
-	"github.com/eyjian/fin-vault/backend/internal/llm"
 	"github.com/eyjian/fin-vault/backend/internal/platformapi"
 	"github.com/eyjian/fin-vault/backend/internal/repository"
 	gormrepo "github.com/eyjian/fin-vault/backend/internal/repository/gorm"
@@ -18,14 +17,13 @@ import (
 
 // App 是组装好的应用实例，main.go 拿到后挂到 HTTP server 即可。
 type App struct {
-	Cfg          *Config
-	DB           *gorm.DB
-	Cache        cache.Provider
-	Repos        *repository.Repositories
-	LLMRegistry  llm.Registry // 可能为 nil（未配置 LLM 时降级）
-	Aggregator   *platformapi.QuoteAggregator
-	Cron         *CronManager
-	Handlers     *Handlers
+	Cfg        *Config
+	DB         *gorm.DB
+	Cache      cache.Provider
+	Repos      *repository.Repositories
+	Aggregator *platformapi.QuoteAggregator
+	Cron       *CronManager
+	Handlers   *Handlers
 }
 
 // Handlers 集中管理全部 Gin Handler。
@@ -42,7 +40,10 @@ type Handlers struct {
 
 // Wire 总装：DB → Repo → Service → Handler。
 //
-// 任何子组件构造失败均直接返回错误；LLM 配置缺失只 Warn 不 Fatal（AI 功能降级）。
+// 任何子组件构造失败均直接返回错误。
+// LLM 相关装配（factory.NewDefaultModel / Runner 等）由 §9 实装；
+// 当前阶段只做 AIMeta 的元信息暴露，cfg.LLM.Providers 为空时
+// /api/v1/ai/providers 返回空数组（降级行为兼容历史）。
 func Wire(cfg *Config) (*App, error) {
 	// 1. DB
 	db, err := NewDB(cfg.Database)
@@ -55,29 +56,23 @@ func Wire(cfg *Config) (*App, error) {
 
 	// 3. Repository 层
 	repos := &repository.Repositories{
-		UoW:            gormrepo.NewUnitOfWork(db),
-		User:           gormrepo.NewUserRepository(db),
-		Platform:       gormrepo.NewPlatformRepository(db),
-		Asset:          gormrepo.NewAssetRepository(db),
-		Holding:        gormrepo.NewHoldingRepository(db),
-		Transaction:    gormrepo.NewTransactionRepository(db),
-		CostLot:        gormrepo.NewCostLotRepository(db),
-		Portfolio:      gormrepo.NewPortfolioRepository(db),
-		Quote:          gormrepo.NewQuoteRepository(db),
-		Rate:           gormrepo.NewRateRepository(db),
+		UoW:         gormrepo.NewUnitOfWork(db),
+		User:        gormrepo.NewUserRepository(db),
+		Platform:    gormrepo.NewPlatformRepository(db),
+		Asset:       gormrepo.NewAssetRepository(db),
+		Holding:     gormrepo.NewHoldingRepository(db),
+		Transaction: gormrepo.NewTransactionRepository(db),
+		CostLot:     gormrepo.NewCostLotRepository(db),
+		Portfolio:   gormrepo.NewPortfolioRepository(db),
+		Quote:       gormrepo.NewQuoteRepository(db),
+		Rate:        gormrepo.NewRateRepository(db),
 	}
 
-	// 4. LLM Registry（失败降级）
-	var llmReg llm.Registry
-	if len(cfg.LLM.Providers) > 0 {
-		reg, err := llm.NewRegistry(cfg.LLM)
-		if err != nil {
-			slog.Warn("llm registry disabled", "err", err)
-		} else {
-			llmReg = reg
-		}
-	} else {
-		slog.Warn("no llm providers configured, AI endpoints will be disabled")
+	// 4. LLM 装配（§9 实装）
+	//
+	// TODO §9: factory.NewDefaultModel(cfg.LLM.ToRegistryEntry(), logger) 喂给 Runner
+	if len(cfg.LLM.Providers) == 0 {
+		slog.Warn("no llm providers configured, AI endpoints will return empty list")
 	}
 
 	// 5. PlatformAPI Aggregator（行情）
@@ -119,23 +114,20 @@ func Wire(cfg *Config) (*App, error) {
 		Quote:       handler.NewQuoteHandler(quoteSvc),
 		Rate:        handler.NewRateHandler(rateSvc),
 		Export:      handler.NewExportHandler(exportSvc),
-	}
-	if llmReg != nil {
-		handlers.AIMeta = handler.NewAIMetaHandler(llmReg)
+		AIMeta:      handler.NewAIMetaHandler(cfg.LLM),
 	}
 
 	// 9. Cron
 	cm := NewCronManager(matureSvc, cfg.Cron.Mature)
 
 	app := &App{
-		Cfg:         cfg,
-		DB:          db,
-		Cache:       cacheProv,
-		Repos:       repos,
-		LLMRegistry: llmReg,
-		Aggregator:  aggregator,
-		Cron:        cm,
-		Handlers:    handlers,
+		Cfg:        cfg,
+		DB:         db,
+		Cache:      cacheProv,
+		Repos:      repos,
+		Aggregator: aggregator,
+		Cron:       cm,
+		Handlers:   handlers,
 	}
 	return app, nil
 }
@@ -157,3 +149,4 @@ func (a *App) Close() {
 		}
 	}
 }
+

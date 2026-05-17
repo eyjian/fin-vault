@@ -90,17 +90,17 @@ func TestSQLiteStore_CreateSession_RejectsEmptyID(t *testing.T) {
 	db := newTestDB(t)
 	store := session.NewSQLiteStore(db, 20)
 	err := store.CreateSession(context.Background(), &domain.Session{UserID: 1})
-	assert.ErrorIs(t, err, errs.ErrAIConversationNotFound)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound)
 }
 
 func TestSQLiteStore_GetSession_NotFound(t *testing.T) {
 	db := newTestDB(t)
 	store := session.NewSQLiteStore(db, 20)
 	_, err := store.GetSession(context.Background(), "no-such-id")
-	assert.ErrorIs(t, err, errs.ErrAIConversationNotFound)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound)
 
 	_, err = store.GetSession(context.Background(), "")
-	assert.ErrorIs(t, err, errs.ErrAIConversationNotFound)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound)
 }
 
 func TestSQLiteStore_DeleteSession_CascadeAndNotFound(t *testing.T) {
@@ -126,7 +126,7 @@ func TestSQLiteStore_DeleteSession_CascadeAndNotFound(t *testing.T) {
 	require.NoError(t, store.DeleteSession(ctx, s.ID))
 
 	_, err := store.GetSession(ctx, s.ID)
-	assert.ErrorIs(t, err, errs.ErrAIConversationNotFound)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound)
 
 	var msgCount, stepCount int64
 	require.NoError(t, db.Model(&domain.Message{}).Where("f_session_id = ?", s.ID).Count(&msgCount).Error)
@@ -136,11 +136,11 @@ func TestSQLiteStore_DeleteSession_CascadeAndNotFound(t *testing.T) {
 
 	// 二次删除返回 NotFound
 	err = store.DeleteSession(ctx, s.ID)
-	assert.ErrorIs(t, err, errs.ErrAIConversationNotFound)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound)
 
 	// 空字符串
 	err = store.DeleteSession(ctx, "")
-	assert.ErrorIs(t, err, errs.ErrAIConversationNotFound)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound)
 }
 
 // =====================================================================
@@ -324,16 +324,16 @@ func TestSQLiteStore_AppendMessage_RejectsEmptySessionID(t *testing.T) {
 	db := newTestDB(t)
 	store := session.NewSQLiteStore(db, 20)
 	err := store.AppendMessage(context.Background(), &domain.Message{ID: uuid.NewString()})
-	assert.ErrorIs(t, err, errs.ErrAIConversationNotFound)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound)
 	err = store.AppendMessage(context.Background(), nil)
-	assert.ErrorIs(t, err, errs.ErrAIConversationNotFound)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound)
 }
 
 func TestSQLiteStore_ListMessages_EmptySessionID(t *testing.T) {
 	db := newTestDB(t)
 	store := session.NewSQLiteStore(db, 20)
 	_, err := store.ListMessages(context.Background(), "", 0)
-	assert.ErrorIs(t, err, errs.ErrAIConversationNotFound)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound)
 }
 
 // =====================================================================
@@ -388,7 +388,7 @@ func TestSQLiteStore_AppendStep_RejectsEmptySessionID(t *testing.T) {
 	db := newTestDB(t)
 	store := session.NewSQLiteStore(db, 20)
 	err := store.AppendStep(context.Background(), &domain.AgentStep{ID: uuid.NewString()})
-	assert.ErrorIs(t, err, errs.ErrAIConversationNotFound)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound)
 	err = store.AppendStep(context.Background(), nil)
-	assert.ErrorIs(t, err, errs.ErrAIConversationNotFound)
+	assert.ErrorIs(t, err, errs.ErrAISessionNotFound)
 }

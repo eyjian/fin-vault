@@ -54,7 +54,7 @@ var _ SessionStore = (*sqliteStore)(nil)
 // （spec ListSessions 用 updated_at 排序，未编辑前应等于创建时间）。
 func (r *sqliteStore) CreateSession(ctx context.Context, s *domain.Session) error {
 	if s == nil || s.ID == "" {
-		return errs.ErrAIConversationNotFound
+		return errs.ErrAISessionNotFound
 	}
 	now := time.Now()
 	if s.CreatedAt.IsZero() {
@@ -69,16 +69,16 @@ func (r *sqliteStore) CreateSession(ctx context.Context, s *domain.Session) erro
 // GetSession 按 sessionID 查询单条。
 //
 // 受信调用：不强制 user_id 匹配，业务层校验由 service 做。
-// 未找到时返回 errs.ErrAIConversationNotFound（语义复用，§7.1 评估改名）。
+// 未找到时返回 errs.ErrAISessionNotFound（语义为 session 不存在）。
 func (r *sqliteStore) GetSession(ctx context.Context, sessionID string) (*domain.Session, error) {
 	if sessionID == "" {
-		return nil, errs.ErrAIConversationNotFound
+		return nil, errs.ErrAISessionNotFound
 	}
 	var s domain.Session
 	err := r.db.WithContext(ctx).Where("f_id = ?", sessionID).First(&s).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errs.ErrAIConversationNotFound
+			return nil, errs.ErrAISessionNotFound
 		}
 		return nil, err
 	}
@@ -90,7 +90,7 @@ func (r *sqliteStore) GetSession(ctx context.Context, sessionID string) (*domain
 // service 层负责设置 UpdatedAt = time.Now()；store 层兜底：UpdatedAt 为零值时填 now。
 func (r *sqliteStore) UpdateSession(ctx context.Context, s *domain.Session) error {
 	if s == nil || s.ID == "" {
-		return errs.ErrAIConversationNotFound
+		return errs.ErrAISessionNotFound
 	}
 	if s.UpdatedAt.IsZero() {
 		s.UpdatedAt = time.Now()
@@ -103,19 +103,19 @@ func (r *sqliteStore) UpdateSession(ctx context.Context, s *domain.Session) erro
 // 在单一事务内按 f_session_id 删 t_fv_ai_agent_steps、t_fv_ai_messages，
 // 最后按 f_id 删 t_fv_ai_sessions。任一步骤失败整个事务回滚。
 //
-// 不存在的 sessionID 返回 errs.ErrAIConversationNotFound（spec "DELETE 返回 204"
+// 不存在的 sessionID 返回 errs.ErrAISessionNotFound（spec "DELETE 返回 204"
 // 的前提是 service 层语义层判断；store 层用 RowsAffected==0 识别"不存在"，让 service
 // 决定语义）。
 func (r *sqliteStore) DeleteSession(ctx context.Context, sessionID string) error {
 	if sessionID == "" {
-		return errs.ErrAIConversationNotFound
+		return errs.ErrAISessionNotFound
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// 先确认存在；不存在直接返回 NotFound，避免误删空集
 		var existing domain.Session
 		if err := tx.Where("f_id = ?", sessionID).First(&existing).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return errs.ErrAIConversationNotFound
+				return errs.ErrAISessionNotFound
 			}
 			return err
 		}
@@ -172,11 +172,11 @@ func (r *sqliteStore) ListSessions(
 
 // AppendMessage 写一行消息到 t_fv_ai_messages。
 //
-// SessionID 为空字符串时直接返回 errs.ErrAIConversationNotFound（基本防御）。
+// SessionID 为空字符串时直接返回 errs.ErrAISessionNotFound（基本防御）。
 // service 层负责保证 sessionID 存在且属于当前用户，store 层不再二次查询。
 func (r *sqliteStore) AppendMessage(ctx context.Context, m *domain.Message) error {
 	if m == nil || m.SessionID == "" {
-		return errs.ErrAIConversationNotFound
+		return errs.ErrAISessionNotFound
 	}
 	if m.CreatedAt.IsZero() {
 		m.CreatedAt = time.Now()
@@ -196,7 +196,7 @@ func (r *sqliteStore) ListMessages(
 	ctx context.Context, sessionID string, limit int,
 ) ([]domain.Message, error) {
 	if sessionID == "" {
-		return nil, errs.ErrAIConversationNotFound
+		return nil, errs.ErrAISessionNotFound
 	}
 	if limit <= 0 {
 		limit = r.historyWindow
@@ -228,7 +228,7 @@ func (r *sqliteStore) ListMessages(
 // 完成（design D7：api_key / password / token / authorization 等敏感字段写库前替换为 "***"）。
 func (r *sqliteStore) AppendStep(ctx context.Context, step *domain.AgentStep) error {
 	if step == nil || step.SessionID == "" {
-		return errs.ErrAIConversationNotFound
+		return errs.ErrAISessionNotFound
 	}
 	if step.CreatedAt.IsZero() {
 		step.CreatedAt = time.Now()

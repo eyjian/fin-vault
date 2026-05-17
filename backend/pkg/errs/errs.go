@@ -127,9 +127,7 @@ var (
 // =====================================================================
 
 var (
-	ErrAIConversationNotFound = New(50001, "conversation not found")
-	ErrAIProviderNotFound     = New(50002, "llm provider not configured")
-	ErrAIProviderDisabled     = New(50003, "llm provider disabled")
+	ErrAISessionNotFound      = New(50001, "session not found")
 	ErrAIRequestFailed        = New(50004, "llm request failed")
 	ErrAIToolCallFailed       = New(50005, "llm tool call failed")
 	ErrAIProviderRateLimited  = New(50006, "llm provider rate limited")

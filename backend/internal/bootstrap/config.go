@@ -20,7 +20,7 @@ import (
 
 	"github.com/spf13/viper"
 
-	"github.com/eyjian/fin-vault/backend/internal/llm"
+	"github.com/eyjian/fin-vault/backend/internal/llm/model"
 )
 
 // Config 是 FinVault 后端的强类型配置。
@@ -33,7 +33,7 @@ type Config struct {
 	Log      LogConfig          `mapstructure:"log"`
 	Auth     AuthConfig         `mapstructure:"auth"`
 	Security SecurityConfig     `mapstructure:"security"`
-	LLM      llm.RegistryConfig `mapstructure:"llm"`
+	LLM      model.RegistryConfig `mapstructure:"llm"`
 	AI       AIConfig           `mapstructure:"ai"`
 	Quote    QuoteConfig        `mapstructure:"quote"`
 	Cron     CronConfig         `mapstructure:"cron"`
@@ -107,7 +107,7 @@ type SecurityConfig struct {
 
 // AIConfig AI 模块配置（基于 trpc-agent-go 的会话与运行时）。
 //
-// LLMConfig（多 Provider 路由）由 internal/llm 包内的 RegistryConfig 提供，
+// LLMConfig（多 Provider 路由）由 internal/llm/model 包内的 RegistryConfig 提供，
 // 这里只承载 trpc-agent-go 引入后新增的会话/运行时层配置项。
 type AIConfig struct {
 	Session SessionConfig `mapstructure:"session"`
