@@ -1,22 +1,14 @@
 <script setup lang="ts">
-// AI 对话页：4 场景切换 + Provider 切换 + SSE 流式
+// AI 对话页：Session 管理 + Provider 切换 + 非流式对话
 
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Promotion, ChatLineSquare, Delete } from '@element-plus/icons-vue'
-import { aiApi, aiStream } from '@/api/ai'
+import { aiApi } from '@/api/ai'
 import { useAIStore } from '@/stores/ai'
-import type { AIScene } from '@/api/types'
+import type { ToolCallDTO } from '@/api/types'
 
 const aiStore = useAIStore()
-
-const scene = ref<AIScene>('chat')
-const sceneOptions = [
-  { value: 'chat', label: '自由问答' },
-  { value: 'analysis', label: '盈亏分析' },
-  { value: 'buy_sell', label: '买卖建议' },
-  { value: 'advisor', label: '持仓建议' }
-] as const
 
 interface ChatLine {
   role: 'user' | 'assistant' | 'tool'
@@ -27,9 +19,9 @@ interface ChatLine {
 
 const messages = ref<ChatLine[]>([])
 const input = ref('')
-const conversationId = ref<number | undefined>(undefined)
+const sessionId = ref<string | undefined>(undefined)
 const sending = ref(false)
-let abort: AbortController | null = null
+const loadingHistory = ref(false)
 
 const scrollEl = ref<HTMLElement | null>(null)
 
@@ -41,63 +33,80 @@ async function send() {
   const assistantLine: ChatLine = { role: 'assistant', content: '', pending: true }
   messages.value.push(assistantLine)
   sending.value = true
-  abort = new AbortController()
   await scrollToBottom()
+
   try {
-    const it = aiStream(
-      {
-        conversation_id: conversationId.value,
-        scene: scene.value,
-        content: text,
-        llm_provider: aiStore.currentProvider || undefined
-      },
-      abort.signal
-    )
-    for await (const ev of it) {
-      if (ev.type === 'chunk' && ev.content) {
-        assistantLine.content += ev.content
-      } else if (ev.type === 'tool_call') {
-        messages.value.push({
-          role: 'tool',
-          content: `调用工具 ${ev.tool_name}：${ev.tool_args}`,
-          tool_name: ev.tool_name
-        })
-      } else if (ev.type === 'tool_result') {
-        messages.value.push({
-          role: 'tool',
-          content: `${ev.tool_name} 结果：${(ev.tool_result || '').slice(0, 600)}`,
-          tool_name: ev.tool_name
-        })
-      } else if (ev.type === 'done') {
-        assistantLine.pending = false
-        if (ev.conversation_id) conversationId.value = ev.conversation_id
-      } else if (ev.type === 'error') {
-        assistantLine.pending = false
-        assistantLine.content = (assistantLine.content || '') + '\n\n[错误] ' + (ev.content || '')
-      }
-      await scrollToBottom()
+    // 首次发消息时创建 session
+    if (!sessionId.value) {
+      const created = await aiApi.createSession()
+      sessionId.value = created.session_id
     }
+
+    const resp = await aiApi.sendMessage(sessionId.value, text)
+
+    // 填充助手回复
+    assistantLine.content = resp.assistant_message?.content || ''
+    assistantLine.pending = false
+
+    // 展示工具调用
+    for (const tc of resp.tool_calls || []) {
+      messages.value.push({
+        role: 'tool',
+        content: formatToolCall(tc),
+        tool_name: tc.name
+      })
+    }
+
+    await scrollToBottom()
   } catch (e: any) {
     assistantLine.pending = false
-    assistantLine.content += `\n\n[网络错误] ${e?.message || e}`
+    assistantLine.content += `\n\n[错误] ${e?.message || e}`
     ElMessage.error('对话失败')
   } finally {
     sending.value = false
-    abort = null
   }
 }
 
+function formatToolCall(tc: ToolCallDTO): string {
+  const argsStr = tc.arguments ? JSON.stringify(tc.arguments) : ''
+  const statusTag = tc.status === 'failed' ? ` ❌ ${tc.error_message || ''}` : ''
+  return `${tc.name}(${argsStr})${statusTag}`
+}
+
 function newConversation() {
-  conversationId.value = undefined
+  sessionId.value = undefined
   messages.value = []
 }
 
-function stop() {
-  abort?.abort()
+async function loadHistory() {
+  if (!sessionId.value) return
+  loadingHistory.value = true
+  try {
+    const msgs = await aiApi.listMessages(sessionId.value)
+    messages.value = msgs.map((m) => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content
+    }))
+    await scrollToBottom()
+  } catch {
+    // 静默忽略历史加载失败
+  } finally {
+    loadingHistory.value = false
+  }
+}
+
+async function deleteSession() {
+  if (!sessionId.value) return
+  try {
+    await aiApi.deleteSession(sessionId.value)
+  } catch {
+    // 静默
+  }
+  newConversation()
 }
 
 async function scrollToBottom() {
-  await nextTick()
+  await new Promise((r) => requestAnimationFrame(r))
   if (scrollEl.value) {
     scrollEl.value.scrollTop = scrollEl.value.scrollHeight
   }
@@ -112,13 +121,10 @@ onMounted(async () => {
   <div class="fv-page">
     <div class="fv-card" style="display: flex; flex-direction: column; height: calc(100vh - 120px);">
       <div class="fv-flex" style="margin-bottom: 12px;">
-        <el-radio-group v-model="scene" :disabled="sending">
-          <el-radio-button v-for="s in sceneOptions" :key="s.value" :value="s.value">{{ s.label }}</el-radio-button>
-        </el-radio-group>
         <el-select
           v-model="aiStore.currentProvider"
           placeholder="模型"
-          style="width: 220px; margin-left: 12px;"
+          style="width: 220px; margin-right: 12px;"
           :disabled="sending"
         >
           <el-option
@@ -126,16 +132,17 @@ onMounted(async () => {
             :key="p.name"
             :value="p.name"
             :label="`${p.name} (${p.model})`"
+            :disabled="!p.enabled"
           />
         </el-select>
         <div class="fv-grow" />
         <el-button :icon="ChatLineSquare" @click="newConversation" :disabled="sending">新对话</el-button>
-        <el-button v-if="sending" type="danger" :icon="Delete" @click="stop">停止</el-button>
+        <el-button v-if="sessionId" type="danger" :icon="Delete" @click="deleteSession" :disabled="sending">删除</el-button>
       </div>
 
       <div ref="scrollEl" style="flex: 1; overflow-y: auto; padding: 8px; background: #fafafa; border-radius: 6px;">
         <div v-if="messages.length === 0" style="color: var(--fv-text-muted); text-align: center; padding: 60px 0;">
-          选择场景，输入问题开始对话。盈亏分析 / 买卖建议 / 持仓建议 会自动调用工具读取真实数据。
+          输入问题开始对话，AI 助手会自动调用工具读取真实数据。
         </div>
         <div
           v-for="(m, i) in messages"
@@ -152,7 +159,7 @@ onMounted(async () => {
           <div style="font-size: 12px; color: var(--fv-text-muted); margin-bottom: 4px;">
             {{ m.role === 'user' ? '我' : m.role === 'tool' ? `工具 / ${m.tool_name || ''}` : 'AI 助手' }}
           </div>
-          <div>{{ m.content }}<span v-if="m.pending" style="color: var(--fv-text-muted);">▍</span></div>
+          <div>{{ m.content }}<span v-if="m.pending" style="color: var(--fv-text-muted);">思考中...</span></div>
         </div>
       </div>
 

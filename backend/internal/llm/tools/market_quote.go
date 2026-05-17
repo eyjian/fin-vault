@@ -91,7 +91,7 @@ func NewMarketQuoteTool(deps MarketQuoteDeps) sdktool.CallableTool {
 			}
 			if asset == nil {
 				return MarketQuoteOutput{}, fmt.Errorf(
-					"asset not found for symbol %q (provider=local_asset): %w",
+					"asset not found for symbol %q: this system can only query assets the user has added to their portfolio. Tell the user they need to add this asset first, or ask if they want to check their existing holdings instead (provider=local_asset): %w",
 					symbol, errs.ErrAIToolCallFailed,
 				)
 			}
@@ -114,6 +114,6 @@ func NewMarketQuoteTool(deps MarketQuoteDeps) sdktool.CallableTool {
 			return out, nil
 		},
 		sdkfunction.WithName("market_quote"),
-		sdkfunction.WithDescription("按 symbol（资产代码，如 sh000001）查询当前用户已记录资产的最新行情，返回 price/change_percent/updated_at 等字段。"),
+		sdkfunction.WithDescription("查询当前用户已记录资产的最新行情（价格、涨跌幅、报价时间）。symbol 必须是该用户在系统中已存在的资产代码（如 sh000001），不能凭空编造。如果不确定用户持有哪些资产，请先调用 holding_query 或 search_fund 获取合法的 asset_code/symbol，再调用本工具。"),
 	)
 }

@@ -161,34 +161,46 @@ export interface ExchangeRate {
   source?: 'manual' | 'pboc' | 'api'
 }
 
-export interface AIConversation {
-  id: number
+export interface AISession {
+  id: string
   user_id: number
   title: string
-  scene: string
-  llm_provider: string
-  llm_model: string
-  message_count: number
-  total_tokens: number
-  status: string
   created_at: string
+  updated_at: string
 }
 
 export interface AIMessage {
-  id: number
-  conversation_id: number
-  role: 'system' | 'user' | 'assistant' | 'tool'
+  id: string
+  role: 'user' | 'assistant'
   content: string
-  tool_name?: string
-  tool_args?: string
-  tool_result?: string
-  tool_call_id?: string
-  token_count?: number
-  created_at?: string
+  created_at: string
+  token_usage?: Record<string, number>
 }
 
 export interface ProviderInfo {
   name: string
   model: string
   is_default: boolean
+  enabled: boolean
+}
+
+export interface ToolCallDTO {
+  name: string
+  arguments?: Record<string, unknown>
+  started_at: string
+  finished_at: string
+  status: 'success' | 'failed'
+  error_message?: string
+}
+
+export interface TokenUsage {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+}
+
+export interface SendResp {
+  assistant_message: AIMessage
+  tool_calls: ToolCallDTO[]
+  token_usage: TokenUsage
 }
