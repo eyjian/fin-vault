@@ -10,7 +10,6 @@ import (
 	"github.com/eyjian/fin-vault/backend/internal/cache"
 	"github.com/eyjian/fin-vault/backend/internal/handler"
 	"github.com/eyjian/fin-vault/backend/internal/llm"
-	"github.com/eyjian/fin-vault/backend/internal/llm/tools"
 	"github.com/eyjian/fin-vault/backend/internal/platformapi"
 	"github.com/eyjian/fin-vault/backend/internal/repository"
 	gormrepo "github.com/eyjian/fin-vault/backend/internal/repository/gorm"
@@ -100,23 +99,7 @@ func Wire(cfg *Config) (*App, error) {
 		aggregator = nil
 	}
 
-	// 6. Tools Registry
-	toolReg := tools.NewRegistry()
-	toolReg.Register(tools.NewHoldingQueryTool(tools.HoldingQueryDeps{
-		Holding: repos.Holding, Asset: repos.Asset,
-	}))
-	toolReg.Register(tools.NewMarketDataTool(tools.MarketDataDeps{
-		Quote: repos.Quote, Asset: repos.Asset,
-	}))
-	toolReg.Register(tools.NewProfitCalcTool(tools.ProfitCalcDeps{
-		Holding: repos.Holding, Quote: repos.Quote,
-	}))
-	toolReg.Register(tools.NewHistoryQueryTool(tools.HistoryQueryDeps{
-		Transaction: repos.Transaction,
-	}))
-	toolReg.Register(tools.NewPlatformSummaryTool(tools.PlatformSummaryDeps{
-		Holding: repos.Holding, Platform: repos.Platform, Quote: repos.Quote,
-	}))
+	// 6. Tools 注册由 §9 装配阶段完成（agent.NewToolsetAgentFactory + Runner 装配）。
 
 	// 7. Services
 	assetSvc := service.NewAssetService(repos.UoW, repos.Asset, repos.Platform)
