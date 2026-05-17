@@ -9,6 +9,7 @@ import (
 
 	"github.com/eyjian/fin-vault/backend/internal/cache"
 	"github.com/eyjian/fin-vault/backend/internal/handler"
+	"github.com/eyjian/fin-vault/backend/internal/llm/session"
 	"github.com/eyjian/fin-vault/backend/internal/platformapi"
 	"github.com/eyjian/fin-vault/backend/internal/repository"
 	gormrepo "github.com/eyjian/fin-vault/backend/internal/repository/gorm"
@@ -75,10 +76,8 @@ func Wire(cfg *Config) (*App, error) {
 
 	// 4. LLM 装配（§9 实装）
 	//
-	// TODO §9: factory.NewDefaultModel(cfg.LLM.ToRegistryEntry(), logger) 喂给 Runner
-	if len(cfg.LLM.Providers) == 0 {
-		slog.Warn("no llm providers configured, AI endpoints will return empty list")
-	}
+	// providers 启动日志由 wireAI 接管（更精确：含 configured 列表 + default + reason），
+	// 此处不再重复打 Warn。LLM 不可用时由 wireAI 走 D16 降级路径，AIMessage 保持 nil。
 
 	// 5. PlatformAPI Aggregator（行情）
 	httpTimeout := cfg.Quote.HTTPTimeout
@@ -122,23 +121,15 @@ func Wire(cfg *Config) (*App, error) {
 		AIMeta:      handler.NewAIMetaHandler(cfg.LLM),
 	}
 
-	// 8.x AI Session / AI Message handlers —— §9 条件装配
+	// 8.x AI Session / AI Message handlers —— §9 装配（含 D16 LLM 不可用降级）。
 	//
-	// 当前 §8 阶段：SessionStore + Runner 均未在 wire 装配（属 §9 范围），所以
-	// AISessionHandler / AIMessageHandler 都保留 nil 占位，router.go 通过 nil-check
-	// 跳过注册。e2e handler 单测自包装（直接 httptest + handler.Register 到临时 router），
-	// 不依赖 wire.go 装配链，本期 nil 不影响测试。
-	//
-	// TODO §9: 取消 placeholder，实装：
-	//   sessionStore := session.NewSQLiteStore(db, cfg.AI.Session.HistoryWindow)
-	//   aiSessionSvc := service.NewAISessionService(sessionStore)
-	//   handlers.AISession = handler.NewAISessionHandler(aiSessionSvc)
-	//
-	//   factory := agent.NewToolsetAgentFactory(cfg.LLM, ...)
-	//   runner   := agent.NewTRPCRunner(factory.Build, sessionStore, cfg.AI.Session.HistoryWindow, slog.Default())
-	//   aiMsgSvc := service.NewAIMessageService(aiSessionSvc, runner)
-	//   handlers.AIMessage = handler.NewAIMessageHandler(aiMsgSvc)
-	slog.Warn("AI session/message endpoints disabled until §9 wiring (SessionStore + Runner not yet assembled)")
+	// wireAI 内部完成：
+	//   - 始终装 AISession（CRUD 不依赖 Runner）
+	//   - 装 7 工具 + factory + Runner + AIMessage（正常路径）
+	//   - LLM 不可用 → AIMessage 留 nil，router 条件挂载兜底（POST /messages 不注册 → 404）
+	// e2e handler 单测自包装 httptest router，不依赖本装配链。
+	sessionStore := session.NewSQLiteStore(db, cfg.AI.Session.HistoryWindow)
+	handlers.AISession, handlers.AIMessage = wireAI(cfg, repos, sessionStore, slog.Default())
 
 	// 9. Cron
 	cm := NewCronManager(matureSvc, cfg.Cron.Mature)
