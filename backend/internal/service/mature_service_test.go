@@ -67,8 +67,8 @@ func TestMatureService_RunOnce_BasicHappyPath(t *testing.T) {
 		ProductType:   "fixed_deposit",
 		ExpectedYield: decimal.RequireFromString("4"), // 4% 年化
 		TermDays:      365,
-		StartDate:     &startDate,
-		EndDate:       &endDate,
+		StartDate:     domain.NewNullableDate(&startDate),
+		EndDate:       domain.NewNullableDate(&endDate),
 	})
 
 	svc := NewMatureService(uow, holdingRepo, assetRepo, txnRepo)
@@ -252,7 +252,7 @@ func TestMatureService_RunOnce_ActualYieldOverridesExpected(t *testing.T) {
 		ExpectedYield: decimal.RequireFromString("3"), // 不应被使用
 		ActualYield:   decimal.RequireFromString("5"), // 实际 5%
 		TermDays:      365,
-		EndDate:       &endDate,
+		EndDate:       domain.NewNullableDate(&endDate),
 	})
 
 	svc := NewMatureService(uow, holdingRepo, assetRepo, txnRepo)
@@ -302,7 +302,7 @@ func TestMatureService_RunOnce_MixedBatch(t *testing.T) {
 		AssetID:       200,
 		ExpectedYield: decimal.RequireFromString("4"),
 		TermDays:      365,
-		EndDate:       &endDate,
+		EndDate:       domain.NewNullableDate(&endDate),
 	})
 
 	svc := NewMatureService(uow, holdingRepo, assetRepo, txnRepo)

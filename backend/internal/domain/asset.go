@@ -34,9 +34,9 @@ type FundDetail struct {
 	FundType      string          `gorm:"size:20;column:f_fund_type" json:"fund_type"`
 	Manager       string          `gorm:"size:64;column:f_manager" json:"manager"`
 	Company       string          `gorm:"size:128;column:f_company" json:"company"`
-	InceptionDate *time.Time      `gorm:"type:date;column:f_inception_date" json:"inception_date,omitempty"`
+	InceptionDate NullableDate    `gorm:"type:date;column:f_inception_date" json:"inception_date,omitempty"`
 	LatestNAV     decimal.Decimal `gorm:"type:decimal(20,4);column:f_latest_nav" json:"latest_nav"`
-	LatestNAVDate *time.Time      `gorm:"type:date;column:f_latest_nav_date" json:"latest_nav_date,omitempty"`
+	LatestNAVDate NullableDate    `gorm:"type:date;column:f_latest_nav_date" json:"latest_nav_date,omitempty"`
 	Benchmark     string          `gorm:"size:255;column:f_benchmark" json:"benchmark"`
 	CreatedAt     time.Time       `gorm:"not null;column:f_created_at" json:"created_at"`
 	UpdatedAt     time.Time       `gorm:"not null;column:f_updated_at" json:"updated_at"`
@@ -51,7 +51,7 @@ type StockDetail struct {
 	Market          string          `gorm:"size:20;not null;index:idx_market;column:f_market" json:"market"`
 	Industry        string          `gorm:"size:64;column:f_industry" json:"industry"`
 	Sector          string          `gorm:"size:64;column:f_sector" json:"sector"`
-	ListingDate     *time.Time      `gorm:"type:date;column:f_listing_date" json:"listing_date,omitempty"`
+	ListingDate     NullableDate    `gorm:"type:date;column:f_listing_date" json:"listing_date,omitempty"`
 	TotalShares     decimal.Decimal `gorm:"type:decimal(20,2);column:f_total_shares" json:"total_shares"`
 	LatestPrice     decimal.Decimal `gorm:"type:decimal(20,4);column:f_latest_price" json:"latest_price"`
 	LatestPriceTime *time.Time      `gorm:"column:f_latest_price_time" json:"latest_price_time,omitempty"`
@@ -68,8 +68,8 @@ type WealthDetail struct {
 	ProductType    string          `gorm:"size:20;not null;column:f_product_type" json:"product_type"`
 	ExpectedYield  decimal.Decimal `gorm:"type:decimal(8,4);column:f_expected_yield" json:"expected_yield"`
 	ActualYield    decimal.Decimal `gorm:"type:decimal(8,4);column:f_actual_yield" json:"actual_yield"`
-	StartDate      *time.Time      `gorm:"type:date;column:f_start_date" json:"start_date,omitempty"`
-	EndDate        *time.Time      `gorm:"type:date;index:idx_end_date;column:f_end_date" json:"end_date,omitempty"`
+	StartDate      NullableDate    `gorm:"type:date;column:f_start_date" json:"start_date,omitempty"`
+	EndDate        NullableDate    `gorm:"type:date;index:idx_end_date;column:f_end_date" json:"end_date,omitempty"`
 	TermDays       int             `gorm:"column:f_term_days" json:"term_days"`
 	MinAmount      decimal.Decimal `gorm:"type:decimal(20,2);column:f_min_amount" json:"min_amount"`
 	RedemptionRule string          `gorm:"size:255;column:f_redemption_rule" json:"redemption_rule"`
