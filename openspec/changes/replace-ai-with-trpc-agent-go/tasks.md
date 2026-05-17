@@ -59,10 +59,11 @@
 
 ## 6. 工具改造
 
+- [ ] 6.0 在 `backend/internal/llm/tools/context.go` 定义 unexported ctxKey + 导出 `WithUserID(ctx, uint) context.Context` 与 `UserIDFromContext(ctx) (uint, bool)` 两个 helper（用于工具内部强制隔离用户身份；service 层注入；详见 design.md D13）
 - [ ] 6.1 删除 `backend/internal/llm/tools/registry.go`、`util.go`（中心化注册表不再需要）
 - [ ] 6.2 改造 `history_query.go` 适配 trpc-agent-go `tool.Tool` 接口，参数结构体 + json/description tag
 - [ ] 6.3 改造 `holding_query.go`，`Run` 内强制按当前 `user_id` 过滤
-- [ ] 6.4 改造 `profit_calc.go` / `platform_summary.go`
+- [ ] 6.4 改造 `profit_calc.go` / `platform_summary.go` / `market_data.go`（三个只读查询工具同类改造）
 - [ ] 6.5 新增 `search_fund.go`：按 `keyword` 模糊匹配 `code`/`name`，结果上限 20
 - [ ] 6.6 新增 `market_quote.go`：按 `symbol`（如 `sh000001`）查上证指数等行情
 - [ ] 6.7 在 `agent/runner_trpc.go` 启动时把所有工具自动注册到 Runner，并打印工具清单日志

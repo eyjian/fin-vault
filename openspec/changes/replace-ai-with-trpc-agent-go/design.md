@@ -217,7 +217,7 @@ backend/internal/llm/
 
 **红线**（与 D8 一致）：
 
-- trpc-agent-go 的 import 仅出现在 `internal/llm/agent/` 与 `internal/llm/model/` 包内，业务代码（service / handler）零命中。
+- trpc-agent-go 的 import 仅出现在 `internal/llm/agent/`、`internal/llm/model/` 与 `internal/llm/tools/` 包内（tools 包通过 trpc-agent-go function 子包定义 LLM 工具，schema 由 `json` + `jsonschema` tag 自动反射）。其它任何业务代码（service / handler / domain / repository / bootstrap / middleware / ...）禁止 import trpc-agent-go。
 - §5 验收时由 tester 跑 `grep -r "trpc.group/trpc-go/trpc-agent-go" backend/internal/{service,handler}/` 确认 0 命中。
 
 **理由**：
@@ -230,6 +230,68 @@ backend/internal/llm/
 
 - 实现 `session.Service` 适配器，把 SDK Service 调用代理到我们的 SessionStore（被否：双向适配代码量翻倍，session 模型语义不完全对齐，调试困难）。
 - 直接使用 SDK 的 PG/MySQL session.Service 实现（被否：fin-vault 主存 SQLite + 业务表用 GORM AutoMigrate，引入 SDK 的另一套表破坏数据模型一致性）。
+
+### D13：工具用户隔离强制约束
+
+**背景**：
+
+`spec ai-tools` 的 `holding_query 仅看本人持仓` Scenario 是**行为级**约束（"工具应仅返回 user_id=A 的持仓"），D13 是**实现级**约束（"通过什么工程手段保证行为级约束不被绕过"）。
+
+`backend/internal/llm/tools/holding_query.go` 在改造前存在高危越权漏洞：
+
+- 入参 schema 暴露 `user_id` 字段，让 LLM 看到这个参数
+- `user_id == 0` 时**默认 1**作为兜底（"无身份兜底为 user 1"，等于把所有匿名调用都路由到 user 1 的数据）
+
+恶意 prompt 可以让 LLM 传 `user_id=2` 越权访问别人持仓；恶意上游 service 调用不带 user_id 时也会被默认到 user 1。**§6.3 改造时一并修复**，不开独立 hotfix commit。
+
+**强制规则**（reviewer 看到违反直接打回）：
+
+1. **入参 schema 禁止 `user_id` 字段**：凡涉及用户数据的工具（`history_query` / `holding_query` / `market_data` / `profit_calc` / `platform_summary` 及未来新增同类工具），其 Args struct **不得包含 `UserID` / `user_id` 字段**——既不让 LLM 看到该参数，也禁止 LLM 传入。schema 干净地只暴露过滤参数（asset_type / platform_id / status 等业务维度）。
+
+2. **fn 必须从 ctx 提取 user_id**：工具实现的 fn 函数体**必须**调用 `tools.UserIDFromContext(ctx)` 提取身份；提取失败（key 不存在 / 类型不对 / 值为 0）**直接返回错误**，禁止"无身份兜底"等危险默认值。错误用 `errs.ErrAIToolCallFailed.WithMsg("user_id not in context")` 或等价 `fmt.Errorf` 兜底。
+
+3. **ctxKey 类型 unexported**：在 `backend/internal/llm/tools/context.go` 内定义：
+
+```go
+package tools
+
+import "context"
+
+type ctxKeyType struct{}
+
+var ctxKeyUserID = ctxKeyType{}
+
+// WithUserID 在 ctx 中注入 user_id，供工具 fn 内强制隔离使用。
+// service 层在调业务 Runner.Run 之前调用此函数。
+func WithUserID(ctx context.Context, uid uint) context.Context {
+    return context.WithValue(ctx, ctxKeyUserID, uid)
+}
+
+// UserIDFromContext 从 ctx 提取 user_id；不存在或为 0 返回 (0, false)。
+// 工具 fn 必须用此函数获取身份，禁止读 args.UserID。
+func UserIDFromContext(ctx context.Context) (uint, bool) {
+    v, ok := ctx.Value(ctxKeyUserID).(uint)
+    if !ok || v == 0 {
+        return 0, false
+    }
+    return v, true
+}
+```
+
+ctxKey 类型 unexported 防止其它包伪造 key 绕过隔离；只通过 `WithUserID` 注入。
+
+4. **未来新增涉用户工具必须遵守 D13**：新工具 PR review 时，先看入参 struct 字段；如含 `user_id` / `userID` 等字段直接打回，让作者重写。tester 验收 §6 时跑 grep 验证 7 个现有工具入参全部不含 user_id 字段。
+
+**理由**：
+
+- 单一身份注入路径（service → ctx → 工具）杜绝身份伪造与"忘记过滤"两类典型漏洞
+- 入参 schema 不含 user_id，LLM 物理上看不到这个参数，prompt injection 攻击面消失
+- ctxKey unexported 让"非法注入"在编译期就过不了（外包写不出 `ctx.WithValue(SomeKey, ...)` 拿到正确的 key）
+
+**备选**：
+
+- 在每个工具 fn 内手动重复 user_id 校验逻辑（被否：散落实现，易遗漏；新工具作者忘记加校验是常见疏忽）
+- 在 SDK 层拦截（被否：SDK 不感知业务身份概念，跨 SDK 升级风险高）
 
 ## Risks / Trade-offs
 
