@@ -237,7 +237,31 @@ func (r *sqliteStore) AppendStep(ctx context.Context, step *domain.AgentStep) er
 	return r.db.WithContext(ctx).Create(step).Error
 }
 
-// EstimateStepsSize 由 §4.4 dev_2 实现，本占位仅满足接口编译期断言。
+// EstimateStepsSize 用 PRAGMA 估算 SQLite 整个数据库的占用字节数。
+//
+// 设计冲突取舍（spec ai-session 字面 vs design Risks 表选项）：
+//   - spec ai-session 字面要求估算 t_fv_ai_agent_steps 表级；
+//   - design.md Risks 表选用 PRAGMA page_count * page_size 整库估算；
+//   - 本实现采纳后者，理由：
+//     1. SQLite dbstat 虚表（精确表级估算）需要编译时打开 -DSQLITE_ENABLE_DBSTAT_VTAB，
+//        glebarez/sqlite 默认不带，无法做精确表级估算；
+//     2. 整库 ≥ 表实际，触发清理偏早一点是保守行为，且 CleanupSteps 仅删
+//        t_fv_ai_agent_steps，不会误伤 sessions/messages（spec
+//        "Scenario: 清理不影响用户消息" 仍成立）；
+//     3. max_steps_size_mb=100MB 量级下 dict/quote 等小表占比可忽略。
+//
+// 返回字节数；调用方按 MB 比较（CleanupSteps 内部转换）。
+// PRAGMA 读取失败返回 (0, error)。
+//
+// 实现细节：glebarez/sqlite 用 modernc.org/sqlite 内核，PRAGMA 用
+// `db.Raw("PRAGMA xxx").Scan(&v)` 读单行单列即可。
 func (r *sqliteStore) EstimateStepsSize(ctx context.Context) (int64, error) {
-	return 0, errors.New("not implemented: §4.4 placeholder")
+	var pageCount, pageSize int64
+	if err := r.db.WithContext(ctx).Raw("PRAGMA page_count").Scan(&pageCount).Error; err != nil {
+		return 0, err
+	}
+	if err := r.db.WithContext(ctx).Raw("PRAGMA page_size").Scan(&pageSize).Error; err != nil {
+		return 0, err
+	}
+	return pageCount * pageSize, nil
 }

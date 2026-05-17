@@ -3,7 +3,6 @@ package session_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
@@ -392,17 +391,4 @@ func TestSQLiteStore_AppendStep_RejectsEmptySessionID(t *testing.T) {
 	assert.ErrorIs(t, err, errs.ErrAIConversationNotFound)
 	err = store.AppendStep(context.Background(), nil)
 	assert.ErrorIs(t, err, errs.ErrAIConversationNotFound)
-}
-
-// =====================================================================
-// EstimateStepsSize 占位（§4.4 待 dev_2 实现）
-// =====================================================================
-
-func TestSQLiteStore_EstimateStepsSize_PlaceholderReturnsError(t *testing.T) {
-	db := newTestDB(t)
-	store := session.NewSQLiteStore(db, 20)
-	size, err := store.EstimateStepsSize(context.Background())
-	require.Error(t, err, "占位实现应返回 error，等 §4.4 替换")
-	assert.True(t, errors.Is(err, err) && err.Error() == "not implemented: §4.4 placeholder")
-	assert.EqualValues(t, 0, size)
 }
