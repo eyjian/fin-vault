@@ -71,13 +71,15 @@
 
 ## 7. Service 层
 
-> **范围调整**：旧 ChatService / AdvisorService / AnalysisService（基于自研 Provider）已在 §2.8 删除，本节只剩"自研 Provider 文件退场 + 新 Service 新建"。
+> **范围调整**：旧 ChatService / AdvisorService / AnalysisService（基于自研 Provider）已在 §2.8 删除，本节剩"类型搬迁 + 自研 Provider 文件退场 + 错误码清理 + AIMetaHandler 改造 + 新 Service 新建 + §5 step.MessageID 关联补漏"共 7 子项。
 
-- [ ] 7.1 删除 `backend/internal/llm/openai_provider.go`、`registry.go`、`registry_test.go`、`provider.go`、`fake_provider.go`、`config.go`（自研 Provider 整体退场）；同步评估并按需删除 `pkg/errs/errs.go` 中已无引用的旧 AI 错误码（如 `ErrAIConversationNotFound` / `ErrAIRequestFailed` 等）及 `response.go` 引用
-- [ ] 7.2 新建 `service/ai_session_service.go`：会话 CRUD、用户隔离校验
-- [ ] 7.3 新建 `service/ai_message_service.go`：调用 `Runner.Run`，落 user/assistant 消息，串起 step 事件
-- [ ] 7.4 在 service 层禁止 import `trpc-agent-go`（用 lint 规则或 review 把关）
-- [ ] 7.5 service 单测：用 mock Runner + in-memory store
+- [ ] 7.0 在 `backend/internal/llm/model/types.go` 搬迁 `RegistryConfig` / `ProviderConfig` 类型（与 dev_2 §5.1 已搬的 `RegistryEntry` / `ProviderEntry` 同一文件聚合）；同步把 `backend/internal/bootstrap/config.go` 的 `Config.LLM` 类型从 `llm.RegistryConfig` 改为 `model.RegistryEntry`（viper mapstructure tag 不变；setDefaults / 校验逻辑保持现状）
+- [ ] 7.1 删除 `backend/internal/llm/openai_provider.go` / `provider.go` / `fake_provider.go` / `registry.go` / `registry_test.go` / `config.go`（自研 Provider 整体退场）；同步在 `pkg/errs/errs.go` 删除 `ErrAIProviderNotFound`（50002）/ `ErrAIProviderDisabled`（50003）（grep 验证 0 引用），改名 `ErrAIConversationNotFound` → `ErrAISessionNotFound`（50001 message 同步改为 `"session not found"`，全仓 24 处引用一并替换）；改造 `backend/internal/handler/ai_meta_handler.go` 直接消费 `cfg.LLM.Providers` 列出 provider names + enabled 状态（保留 `/api/v1/ai/providers` 路由），无 `Registry` 抽象；摘除 `bootstrap/wire.go` 中 `llm.Registry` 装配段（L70-82）+ `App.LLMRegistry` 字段；以上为单原子 commit 保证 build 通过
+- [ ] 7.2 新建 `backend/internal/service/ai_session_service.go`（会话 CRUD：Create / Get / Update / Delete / List；强制按 ctx 提取的 userID 校验归属；不归属返 `ErrAISessionNotFound`（50001）不暴露存在性，对应 spec ai-session "拒绝删除他人会话 404 不暴露存在性"）
+- [ ] 7.3 新建 `backend/internal/service/ai_message_service.go`（调业务 `Runner.Run`，落 user/assistant 消息归 Runner 内部按 D12 五步约束，service 不重复落 user/assistant message；调 `Runner.Run` 之前必须双 ctx 注入：`tools.WithUserID(ctx, uid)` + `agent.WithUserID(ctx, fmt.Sprint(uid))`；按 D14 规则预生成 `assistantMessageID = uuid.NewString()` 并通过 `agent.WithAssistantMessageID(ctx, msgID)` 注入；调 Runner 之前先 `aiSessionSvc.Get` 校验 sessionID 归属当前 user）
+- [ ] 7.4 在 service 层禁止 import `trpc-agent-go` SDK（grep 把关：`grep -rn "trpc.group/trpc-go/trpc-agent-go" backend/internal/service/` 必须 0 命中；service 通过 import `internal/llm/agent` + `internal/llm/tools` 业务包间接使用 SDK 能力，符合 D12）
+- [ ] 7.5 service 单测：用 mock Runner（手写 fake，与 §5 testhelpers_test.go 模式一致）+ in-memory `session.SessionStore`（复用 §4 `sqlite_store.go` + `:memory:` SQLite）；关键用例含跨用户隔离回归（`Test_*_OtherUser_Returns404Like`）+ 双 ctx 注入断言（fake Runner 内 inspect ctx）+ Runner 错误码透传 + ToolCalls 关联
+- [ ] 7.6 补 §5 设计遗漏（详见 design.md D14）：在 `backend/internal/llm/agent/` 新增 `WithAssistantMessageID(ctx, msgID) ctx` 与 `assistantMessageIDFromCtx(ctx) (string, bool)` helper（unexported ctxKey）；扩展 `event_handler.appendStepSafe` 签名加 `messageID string` 参数（5 处调用站点同步更新；从 ctx 提取失败降级为空串 + warn 日志，不阻塞）；`runner_trpc.go` 内 assistant message 写入时使用同一 messageID（保证 `step.MessageID` 与 `assistant_message.ID` 一致）；同时补 §5 tester 漏检：在 §7.5 单测中加 `Test_AppendStep_LinkedToAssistantMessageID` 回归用例
 
 ## 8. Handler & 路由
 

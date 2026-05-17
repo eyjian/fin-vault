@@ -293,6 +293,38 @@ ctxKey 类型 unexported 防止其它包伪造 key 绕过隔离；只通过 `Wit
 - 在每个工具 fn 内手动重复 user_id 校验逻辑（被否：散落实现，易遗漏；新工具作者忘记加校验是常见疏忽）
 - 在 SDK 层拦截（被否：SDK 不感知业务身份概念，跨 SDK 升级风险高）
 
+### D14：step.MessageID 关联策略（补 §5 设计遗漏）
+
+**背景**：
+
+- spec ai-agent-runtime 隐含 `step.MessageID` 关联到 assistant message 的契约：前端在某条 assistant 消息下展开 tool_calls 详情时，依据 `t_fv_ai_agent_steps.f_message_id` 关联回该消息
+- domain.AgentStep 的 `f_message_id` 字段在 §2.1 设计为 `varchar(36) not null`（强制非空 + 36 位 UUID 长度）
+- §5 实现遗漏：`agent/event_handler.go` 的 `appendStepSafe` 函数 5 处调用**全部不传 messageID**，写入时 step.MessageID 取 GORM 默认值（空字符串），违反 schema not null 语义；同时让 step 无法关联到任何 assistant message
+- §5 tester 验收时未断言此字段非空，漏检通过
+
+**规则**（service / agent 层共同遵守）：
+
+1. **service 预生成 assistantMessageID**：`ai_message_service.go` 在调 `Runner.Run` 之前调用 `assistantMessageID := uuid.NewString()`
+2. **service 通过 helper 注入 ctx**：调用 `agent.WithAssistantMessageID(ctx, assistantMessageID)` —— 该 helper 在 agent 包内 unexported `ctxKey` 私有化（与 D13 ctxKey 模式一致）
+3. **event_handler.appendStepSafe 签名扩展**：函数新增 `messageID string` 参数；所有 5 处调用站点更新；从 ctx 提取 messageID 失败时降级为空字符串 + warn 日志，**不阻塞主流程**（避免回归后阻塞已稳定的 Run 路径）
+4. **runner_trpc.go 内 assistant message 写入用同一 messageID**：从 ctx 提取 assistantMessageID（service 已注入），赋给 `domain.Message.ID`；保证 `step.MessageID` 与 `assistant_message.ID` 一致，前端可通过 messageID 反查关联 step 列表
+
+**理由**：
+
+- spec not null 合规：`f_message_id varchar(36) not null` 字段必须有效填充，不能为空字符串
+- 前端 step ↔ message 关联可靠：UI 在某条 assistant 消息节点下展开 tool_calls 详情有了稳定的 join key
+- 改动小且收敛：runner_trpc.go +5 行（提取 ctx + assistantMessageID 赋给 Message.ID）/ event_handler.go appendStepSafe 加 1 个 messageID 参数 + 5 处调用更新；agent 包内私有 ctxKey 模式与 D13 一致
+- service 自管 messageID 生成符合 D12 五步流程演进：service 是身份与 ID 注入的统一来源
+
+**备选**：
+
+- 留 §10 文档化 + 前端按 sessionID + timestamp 近似关联（被否：spec not null 合规问题不能拖延；近似关联在并发场景下不可靠）
+
+**风险**：
+
+- 触碰 §5 已"完成"代码（runner_trpc.go + event_handler.go）—— 本质是补 §5 设计漏洞而非返工，触碰范围限于 agent 包内；不会重新破坏 §5 验收已通过的 D11/D12 行为契约
+- 扩展 appendStepSafe 签名是 §5 接口面变更—— 该函数 unexported 仅 agent 包内调用，无外部消费者，影响范围限于本议题
+
 ## Risks / Trade-offs
 
 | 风险 | 缓解 |
