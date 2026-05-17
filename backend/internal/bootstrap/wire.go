@@ -37,9 +37,6 @@ type Handlers struct {
 	Transaction *handler.TransactionHandler
 	Quote       *handler.QuoteHandler
 	Rate        *handler.RateHandler
-	Chat        *handler.ChatHandler
-	Advisor     *handler.AdvisorHandler
-	Analysis    *handler.AnalysisHandler
 	Export      *handler.ExportHandler
 	AIMeta      *handler.AIMetaHandler
 }
@@ -69,7 +66,6 @@ func Wire(cfg *Config) (*App, error) {
 		Portfolio:      gormrepo.NewPortfolioRepository(db),
 		Quote:          gormrepo.NewQuoteRepository(db),
 		Rate:           gormrepo.NewRateRepository(db),
-		AIConversation: gormrepo.NewAIConversationRepository(db),
 	}
 
 	// 4. LLM Registry（失败降级）
@@ -131,17 +127,6 @@ func Wire(cfg *Config) (*App, error) {
 	exportSvc := service.NewExportService(repos.Holding, repos.Transaction, repos.Asset, repos.Platform, repos.Quote)
 	matureSvc := service.NewMatureService(repos.UoW, repos.Holding, repos.Asset, repos.Transaction)
 
-	var chatSvc *service.ChatService
-	var advisorSvc *service.AdvisorService
-	var analysisSvc *service.AnalysisService
-	if llmReg != nil {
-		chatSvc = service.NewChatService(llmReg, repos.AIConversation, toolReg, service.ChatConfig{
-			HistoryLimit: 20, MaxTokens: 2048, MaxToolHops: 8,
-		})
-		advisorSvc = service.NewAdvisorService(llmReg, repos.AIConversation, toolReg, 8)
-		analysisSvc = service.NewAnalysisService(llmReg, repos.AIConversation, toolReg, 8)
-	}
-
 	// 8. Handlers
 	handlers := &Handlers{
 		Meta:        handler.NewMetaHandler(assetSvc, "v1.0-impl"),
@@ -151,15 +136,6 @@ func Wire(cfg *Config) (*App, error) {
 		Quote:       handler.NewQuoteHandler(quoteSvc),
 		Rate:        handler.NewRateHandler(rateSvc),
 		Export:      handler.NewExportHandler(exportSvc),
-	}
-	if chatSvc != nil {
-		handlers.Chat = handler.NewChatHandler(chatSvc)
-	}
-	if advisorSvc != nil {
-		handlers.Advisor = handler.NewAdvisorHandler(advisorSvc)
-	}
-	if analysisSvc != nil {
-		handlers.Analysis = handler.NewAnalysisHandler(analysisSvc)
 	}
 	if llmReg != nil {
 		handlers.AIMeta = handler.NewAIMetaHandler(llmReg)

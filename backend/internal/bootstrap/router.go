@@ -49,15 +49,6 @@ func RegisterRoutes(app *App) *gin.Engine {
 	h.Rate.Register(v1)         // /rates
 	h.Export.Register(v1)       // /export
 
-	if h.Chat != nil {
-		h.Chat.Register(v1) // /ai/conversations /ai/chat/stream
-	}
-	if h.Advisor != nil {
-		h.Advisor.Register(v1) // /ai/advisor/recommend
-	}
-	if h.Analysis != nil {
-		h.Analysis.Register(v1) // /ai/analysis/profit
-	}
 	if h.AIMeta != nil {
 		h.AIMeta.Register(v1) // /ai/providers
 	}

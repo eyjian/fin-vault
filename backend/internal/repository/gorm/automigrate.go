@@ -26,9 +26,11 @@ func AutoMigrate(db *gorm.DB) error {
 		// 行情/汇率
 		&domain.PriceQuote{},
 		&domain.ExchangeRate{},
-		// AI / 报表
-		&domain.AIConversation{},
-		&domain.AIMessage{},
+		// AI 会话 / 消息 / 步骤（new，基于 trpc-agent-go）
+		&domain.Session{},
+		&domain.Message{},
+		&domain.AgentStep{},
+		// 报表
 		&domain.Report{},
 	)
 }

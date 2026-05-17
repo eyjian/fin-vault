@@ -190,37 +190,19 @@ type RateRepository interface {
 }
 
 // =====================================================================
-// AIConversation / AIMessage（dev_2 主用）
-// =====================================================================
-
-// AIConversationRepository AI 会话与消息一体接口。
-type AIConversationRepository interface {
-	CreateConv(ctx context.Context, c *domain.AIConversation) error
-	GetConv(ctx context.Context, id uint) (*domain.AIConversation, error)
-	UpdateConv(ctx context.Context, c *domain.AIConversation) error
-	IncrTokens(ctx context.Context, id uint, deltaMessages, deltaTokens int) error
-	DeleteConv(ctx context.Context, id uint) error
-	ListConversations(ctx context.Context, userID uint, opts ListOptions) ([]domain.AIConversation, int64, error)
-
-	AppendMessage(ctx context.Context, m *domain.AIMessage) error
-	ListMessages(ctx context.Context, convID uint, limit int) ([]domain.AIMessage, error)
-}
-
-// =====================================================================
 // Repositories 聚合（供 Wire 一次性注入到 Service）
 // =====================================================================
 
 // Repositories 聚合所有仓储，方便 bootstrap.Wire 一次性注入。
 type Repositories struct {
-	UoW            UnitOfWork
-	User           UserRepository
-	Platform       PlatformRepository
-	Asset          AssetRepository
-	Holding        HoldingRepository
-	Transaction    TransactionRepository
-	CostLot        CostLotRepository
-	Portfolio      PortfolioRepository
-	Quote          QuoteRepository
-	Rate           RateRepository
-	AIConversation AIConversationRepository
+	UoW         UnitOfWork
+	User        UserRepository
+	Platform    PlatformRepository
+	Asset       AssetRepository
+	Holding     HoldingRepository
+	Transaction TransactionRepository
+	CostLot     CostLotRepository
+	Portfolio   PortfolioRepository
+	Quote       QuoteRepository
+	Rate        RateRepository
 }
