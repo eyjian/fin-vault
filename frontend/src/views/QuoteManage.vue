@@ -84,7 +84,9 @@ onMounted(loadAssets)
       <div v-if="lastResult.length > 0" style="margin-top: 12px;">
         <el-divider>刷新结果</el-divider>
         <el-table :data="lastResult" stripe border :max-height="400">
-          <el-table-column prop="asset_id" label="资产ID" width="100" />
+          <el-table-column prop="asset_id" label="资产ID" width="90" />
+          <el-table-column prop="asset_code" label="资产代码" width="120" />
+          <el-table-column prop="name" label="资产名称" min-width="140" show-overflow-tooltip />
           <el-table-column label="状态" width="100">
             <template #default="{ row }">
               <el-tag :type="row.ok ? 'success' : 'danger'" size="small">{{ row.ok ? '成功' : '失败' }}</el-tag>
@@ -99,8 +101,15 @@ onMounted(loadAssets)
 
     <el-dialog v-model="manualVisible" title="手动写入行情" width="500px">
       <el-form :model="manualForm" label-width="100px">
-        <el-form-item label="资产ID">
-          <el-input-number v-model="manualForm.asset_id" :min="1" />
+        <el-form-item label="资产">
+          <el-select v-model="manualForm.asset_id" placeholder="选择资产" filterable style="width: 100%;">
+            <el-option
+              v-for="a in list"
+              :key="a.id"
+              :value="a.id"
+              :label="`${a.asset_code} ${a.name}`"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="价格">
           <MoneyInput v-model="manualForm.price" />

@@ -103,11 +103,13 @@ func (s *QuoteService) GetLatest(ctx context.Context, assetIDs []uint) ([]Latest
 //
 // 返回每个资产的处理结果，包括失败原因（以 40001 错误码体系报告）。
 type RefreshResult struct {
-	AssetID uint   `json:"asset_id"`
-	Source  string `json:"source,omitempty"`
-	Price   string `json:"price,omitempty"`
-	OK      bool   `json:"ok"`
-	Message string `json:"message,omitempty"`
+	AssetID   uint   `json:"asset_id"`
+	AssetCode string `json:"asset_code,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Source    string `json:"source,omitempty"`
+	Price     string `json:"price,omitempty"`
+	OK        bool   `json:"ok"`
+	Message   string `json:"message,omitempty"`
 }
 
 // Refresh 主动刷新。assetIDs 为空时全 fund/stock 资产。
@@ -145,6 +147,11 @@ func (s *QuoteService) Refresh(ctx context.Context, userID uint, assetIDs []uint
 	if len(assets) == 0 {
 		return []RefreshResult{}, nil
 	}
+	// 构建 assetID → Asset 映射，用于返回 asset_code/name
+	assetMap := make(map[uint]*domain.Asset, len(assets))
+	for _, a := range assets {
+		assetMap[a.ID] = a
+	}
 	// 转 AssetKey
 	keys := make([]platformapi.AssetKey, 0, len(assets))
 	for _, a := range assets {
@@ -168,6 +175,10 @@ func (s *QuoteService) Refresh(ctx context.Context, userID uint, assetIDs []uint
 	out := make([]RefreshResult, 0, len(results))
 	for _, r := range results {
 		rr := RefreshResult{AssetID: r.AssetID}
+		if a, ok := assetMap[r.AssetID]; ok {
+			rr.AssetCode = a.AssetCode
+			rr.Name = a.Name
+		}
 		if r.Err != nil {
 			rr.OK = false
 			rr.Message = r.Err.Error()

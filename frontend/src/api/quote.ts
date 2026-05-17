@@ -8,6 +8,8 @@ export interface RefreshReq {
 
 export interface RefreshResult {
   asset_id: number
+  asset_code?: string
+  name?: string
   source?: string
   price?: string
   ok: boolean
