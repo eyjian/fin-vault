@@ -13,8 +13,11 @@
 # Skill 引用语法 `<scope>:<name>` / `<name>`（不带 scope 时按 workspace>global>builtin 查找）。
 # 我们项目级 skill 文件名不带 `fin-vault-` 前缀，scope 由 `.ai-rd-team/skills/` 路径自动判定。
 #
-# ⚠️ 已知风险：`builtin:code-review-checklist` 在 ai-rd-team builtin skills 实现完成前
-# 可能 SkillNotFoundError。届时需要降级为去掉这一引用，或新增同名 workspace skill 占位。
+# ⚠️ Skill 查找顺序：workspace > global > builtin（不带 scope 时按此顺序解析）。
+# 我们引用的 `code-review-checklist` 当前会优先命中 workspace 占位
+# `.ai-rd-team/skills/code-review-checklist.md`（2026-05-17 由 launcher 创建）。
+# 待 ai-rd-team builtin 同名 skill 上线并验证后，可改为 `builtin:code-review-checklist`
+# 并删除 workspace 占位文件。
 #
 # 见 docs/ai-rd-team-onboarding.md §6 + §7.2。
 
@@ -27,7 +30,7 @@ roles:
   # 架构师：定切分、定接口、定命名
   architect:
     skills:
-      - "builtin:code-review-checklist"
+      - "code-review-checklist"   # workspace 占位优先；builtin 就绪后切回 builtin:
       - "go-gin-development"
       - "naming-conventions"
 
@@ -41,7 +44,7 @@ roles:
   # 评审：兜底 dev 没注入的两个高阶约束
   reviewer:
     skills:
-      - "builtin:code-review-checklist"
+      - "code-review-checklist"   # workspace 占位优先；builtin 就绪后切回 builtin:
       - "error-handling"
       - "llm-provider-pattern"
 

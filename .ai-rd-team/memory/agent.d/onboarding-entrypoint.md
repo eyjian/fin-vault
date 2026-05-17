@@ -45,7 +45,7 @@ estimated_tokens: 720
 完成 §1 与 §2 后，**必须**输出一条结构化自检消息，包含 5 项：
 
 1. **角色与实例号**：如 "developer_1"
-2. **已加载 skills 列表**：必须**全部以 `fin-vault-` 开头**；若出现 `python-best-practices` / `pytest-guide` 等 builtin 默认值，**立即停止并报告**（[REQUIREMENT.md](../../../REQUIREMENT.md) §9）
+2. **已加载 skills 列表**：每一项必须满足以下任一条件——(a) 解析自 `.ai-rd-team/skills/` 目录（即 workspace 作用域，含不带 scope 的引用按 workspace>global>builtin 顺序命中 workspace 占位的情况，例如当前的 `code-review-checklist`）；(b) 显式声明为 `builtin:` 且在 [config.advanced.yaml](../../config.advanced.yaml) 中明确列出。若出现 `python-best-practices` / `pytest-guide` 等 builtin 默认 Python 值，**立即停止并报告**（[REQUIREMENT.md](../../../REQUIREMENT.md) §9）。⚠️ 不要求文件名带 `fin-vault-` 前缀——本项目 workspace skill 通过路径而非命名前缀来区分。
 3. **当前活跃议题**：从 `openspec list` 取，确认与 §1 步骤 ③ 一致
 4. **本次任务边界**：用一句话陈述"我接下来要做什么、不做什么"，必须不越过 [REQUIREMENT.md](../../../REQUIREMENT.md) §3 的"不做清单"
 5. **未决问题**：如有，列出 1～3 条，留给主理人答复；无则写 "无"
