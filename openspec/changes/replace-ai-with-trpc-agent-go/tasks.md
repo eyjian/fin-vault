@@ -16,7 +16,7 @@
 - [ ] 2.1 在 `backend/internal/domain/` 新增 `Session` / `Message` / `AgentStep` 三个 struct（均不继承 `BaseModel`，因主键为 UUID 字符串列；按 naming-conventions skill 规范：每个字段显式 `column:` tag、显式实现 `TableName()`，详见 design.md D9）
 - [ ] 2.2 在 `backend/internal/repository/gorm/automigrate.go` 的 AutoMigrate 列表追加 `*domain.Session`（建表 `t_fv_ai_sessions`：`f_id` varchar(36) PK / `f_user_id` / `f_title` / `f_created_at` / `f_updated_at` + 索引 `idx_user_updated(f_user_id,f_updated_at)`）
 - [ ] 2.3 同列表追加 `*domain.Message`（建表 `t_fv_ai_messages`：`f_id` / `f_session_id` FK→`t_fv_ai_sessions.f_id` / `f_role` / `f_content` / `f_token_usage` JSON / `f_created_at` + 索引 `idx_session_created(f_session_id,f_created_at)`）
-- [ ] 2.4 同列表追加 `*domain.AgentStep`（建表 `t_fv_ai_agent_steps`：`f_id` / `f_session_id` FK→`t_fv_ai_sessions.f_id` / `f_message_id` FK→`t_fv_ai_messages.f_id` / `f_event_type` / `f_tool_name` / `f_payload` JSON / `f_created_at` + 索引 `idx_session_created(f_session_id,f_created_at)`、`idx_created`）
+- [ ] 2.4 同列表追加 `*domain.AgentStep`（建表 `t_fv_ai_agent_steps`：`f_id` / `f_session_id` FK→`t_fv_ai_sessions.f_id` / `f_message_id` FK→`t_fv_ai_messages.f_id` / `f_event_type` / `f_tool_name` / `f_payload` JSON / `f_created_at` + 索引 `idx_step_session_created(f_session_id,f_created_at)`、`idx_created`；注：与 §2.3 的 `idx_session_created` 区分，因 SQLite 索引名为库级命名空间，跨表不能同名）
 - [ ] 2.5 本地启动 `go run ./cmd/finvault` 触发 AutoMigrate，用 `sqlite3 data/finvault.db ".schema t_fv_ai_sessions"` / `".schema t_fv_ai_messages"` / `".schema t_fv_ai_agent_steps"` 核对字段类型、索引、外键完整
 
 ### 删旧（本议题用户已确认无老 AI 数据需要兼容）
