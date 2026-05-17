@@ -36,6 +36,11 @@ type Handlers struct {
 	Rate        *handler.RateHandler
 	Export      *handler.ExportHandler
 	AIMeta      *handler.AIMetaHandler
+
+	// AISession / AIMessage 在 §9 装配 SessionStore + Runner 后才非 nil。
+	// 当前 §8 阶段两者均为 nil，路由注册侧用 nil-check 兼容（router.go）。
+	AISession *handler.AISessionHandler
+	AIMessage *handler.AIMessageHandler
 }
 
 // Wire 总装：DB → Repo → Service → Handler。
@@ -116,6 +121,24 @@ func Wire(cfg *Config) (*App, error) {
 		Export:      handler.NewExportHandler(exportSvc),
 		AIMeta:      handler.NewAIMetaHandler(cfg.LLM),
 	}
+
+	// 8.x AI Session / AI Message handlers —— §9 条件装配
+	//
+	// 当前 §8 阶段：SessionStore + Runner 均未在 wire 装配（属 §9 范围），所以
+	// AISessionHandler / AIMessageHandler 都保留 nil 占位，router.go 通过 nil-check
+	// 跳过注册。e2e handler 单测自包装（直接 httptest + handler.Register 到临时 router），
+	// 不依赖 wire.go 装配链，本期 nil 不影响测试。
+	//
+	// TODO §9: 取消 placeholder，实装：
+	//   sessionStore := session.NewSQLiteStore(db, cfg.AI.Session.HistoryWindow)
+	//   aiSessionSvc := service.NewAISessionService(sessionStore)
+	//   handlers.AISession = handler.NewAISessionHandler(aiSessionSvc)
+	//
+	//   factory := agent.NewToolsetAgentFactory(cfg.LLM, ...)
+	//   runner   := agent.NewTRPCRunner(factory.Build, sessionStore, cfg.AI.Session.HistoryWindow, slog.Default())
+	//   aiMsgSvc := service.NewAIMessageService(aiSessionSvc, runner)
+	//   handlers.AIMessage = handler.NewAIMessageHandler(aiMsgSvc)
+	slog.Warn("AI session/message endpoints disabled until §9 wiring (SessionStore + Runner not yet assembled)")
 
 	// 9. Cron
 	cm := NewCronManager(matureSvc, cfg.Cron.Mature)

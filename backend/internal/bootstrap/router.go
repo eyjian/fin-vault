@@ -52,6 +52,12 @@ func RegisterRoutes(app *App) *gin.Engine {
 	if h.AIMeta != nil {
 		h.AIMeta.Register(v1) // /ai/providers
 	}
+	if h.AISession != nil {
+		h.AISession.Register(v1) // /ai/sessions  (CRUD + listMessages)
+	}
+	if h.AIMessage != nil {
+		h.AIMessage.Register(v1) // POST /ai/sessions/:id/messages
+	}
 
 	// dev 模式开放手工触发 cron
 	if app.Cfg.Server.Mode == "debug" || app.Cfg.Server.Mode == "test" {
