@@ -24,27 +24,6 @@ import (
 // DefaultAppName 是注入 SDK 的应用名（同时也是 SDK Runner 的 Trace 标识）。
 const DefaultAppName = "fin-vault"
 
-// userIDCtxKey 业务 ctx 中携带 user_id 的 key。service 层在调 Runner.Run 之前注入。
-type userIDCtxKey struct{}
-
-// WithUserID 在 ctx 中注入用户 ID（service 层在调 Runner.Run 之前调用）。
-func WithUserID(ctx context.Context, userID string) context.Context {
-	return context.WithValue(ctx, userIDCtxKey{}, userID)
-}
-
-// userIDFromCtx 从 ctx 取 user_id；未注入时返回 "anonymous"（仅用作 SDK session 隔离 key 占位）。
-//
-// 业务侧的用户隔离由 SessionStore 保证（spec ai-session "列表只返回当前用户的会话"），
-// SDK 这边的 userID 只影响 inmemory.SessionService 内部 key 拼接，单次 Run 后即丢弃。
-func userIDFromCtx(ctx context.Context) string {
-	if v := ctx.Value(userIDCtxKey{}); v != nil {
-		if s, ok := v.(string); ok && s != "" {
-			return s
-		}
-	}
-	return "anonymous"
-}
-
 // AgentFactory 在每次 Run 时构造一个 SDK Agent 实例（用于支持 fake / mock 注入）。
 //
 // 生产装配（§9）会传一个固定的 sdkAgent；单测可以用 fake 实现。
@@ -182,8 +161,14 @@ func (r *trpcRunner) Run(
 		if b, mErr := json.Marshal(result.Usage); mErr == nil {
 			usageJSON = b
 		}
+		// D14：assistant message id 优先用 ctx 中 service 注入的值，使 step.MessageID
+		// == message.ID；service 路径未注入（直接调 Runner 的非主路径）时现场 NewString 兜底。
+		assistantMsgID, ok := assistantMessageIDFromCtx(ctx)
+		if !ok {
+			assistantMsgID = uuid.NewString()
+		}
 		if err := r.store.AppendMessage(ctx, &domain.Message{
-			ID:         uuid.NewString(),
+			ID:         assistantMsgID,
 			SessionID:  sessionID,
 			Role:       string(sdkmodel.RoleAssistant),
 			Content:    result.AssistantMsg,

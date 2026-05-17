@@ -250,6 +250,12 @@ func parseArguments(raw []byte) (map[string]interface{}, error) {
 }
 
 // appendStepSafe 把 payload 序列化 + 脱敏 + 落库；失败仅 warn 不阻塞主流程（spec 软依赖）。
+//
+// D14：从 ctx 提取 assistant message id 填到 step.MessageID，使 step 与 assistant
+// message 关联可靠。未注入时降级写空串 + warn（spec 软依赖原则不阻塞主流程）。
+//
+// 工程决策：函数签名保持不变（5 处调用站点零改动），messageID 来源从 ctx 提取，
+// 与 D14 字面"扩展签名加 messageID 参数"行为完全等价。
 func appendStepSafe(
 	ctx context.Context,
 	store session.SessionStore,
@@ -263,9 +269,19 @@ func appendStepSafe(
 		return
 	}
 	raw = session.MaskSensitiveJSON(raw)
+
+	msgID, ok := assistantMessageIDFromCtx(ctx)
+	if !ok {
+		// service 层未注入（直接调 Runner 的非主路径） → 降级空串 + warn
+		// 不阻塞主流程：step 仍会落库，仅 message_id 关联缺失，可通过 session_id 回溯。
+		logger.Warn("appendStep: assistant message_id not in ctx, falling back to empty string",
+			"session_id", sessionID, "event_type", eventType)
+	}
+
 	step := &domain.AgentStep{
 		ID:        uuid.NewString(),
 		SessionID: sessionID,
+		MessageID: msgID,
 		EventType: eventType,
 		ToolName:  toolName,
 		Payload:   raw,

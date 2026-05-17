@@ -315,3 +315,60 @@ var assertableStepErr = errString("inject step append failure")
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// =====================================================================
+// D14：step 与 assistant message 关联（appendStepSafe 内部封装方式）
+// =====================================================================
+
+// TestAppendStep_LinkedToAssistantMessageID_WhenInjected
+//
+// service 注入 assistantMessageID → 所有落库 step 的 MessageID 字段 == 注入值。
+// 验证 D14 主路径。
+func TestAppendStep_LinkedToAssistantMessageID_WhenInjected(t *testing.T) {
+	store := newFakeStore()
+	const wantMsgID = "msg-d14-injected"
+	ctx := WithAssistantMessageID(context.Background(), wantMsgID)
+
+	ch := chanFromEvents(
+		newChatCompletionEvent("", []sdkmodel.ToolCall{
+			{ID: "c-1", Type: "function", Function: sdkmodel.FunctionDefinitionParam{Name: "search_fund", Arguments: []byte(`{"keyword":"x"}`)}},
+		}),
+		newToolResponseEvent("c-1", "search_fund", `{"results":[]}`, ""),
+		newChunkEvent("done", &sdkmodel.Usage{TotalTokens: 1}),
+		newRunnerCompletionEvent("req", "inv"),
+	)
+	_, err := AggregateEvents(ctx, ch, store, "sess-1", silentLogger())
+	require.NoError(t, err)
+
+	steps := store.snapshotSteps()
+	require.NotEmpty(t, steps, "应至少落 4 类 step（started/finished/usage/boundary）")
+	for _, s := range steps {
+		assert.Equal(t, wantMsgID, s.MessageID,
+			"D14：所有 step.MessageID 必须 == ctx 注入的 assistantMessageID（event_type=%s）", s.EventType)
+	}
+}
+
+// TestAppendStep_NoAssistantMessageIDInCtx_FallbacksToEmpty_DoesNotBlock
+//
+// service 未注入 assistantMessageID（直接调 Runner 的非主路径）→ step.MessageID 降级空串、
+// 但主流程不阻塞，step 仍正常落库（spec 软依赖原则）。
+func TestAppendStep_NoAssistantMessageIDInCtx_FallbacksToEmpty_DoesNotBlock(t *testing.T) {
+	store := newFakeStore()
+	// ctx 不注入 assistantMessageID
+	ctx := context.Background()
+
+	ch := chanFromEvents(
+		newChunkEvent("hi", &sdkmodel.Usage{TotalTokens: 1}),
+		newRunnerCompletionEvent("req", "inv"),
+	)
+	res, err := AggregateEvents(ctx, ch, store, "sess-2", silentLogger())
+	require.NoError(t, err, "未注入 messageID 不应阻塞主流程")
+	assert.Equal(t, "hi", res.AssistantMsg)
+
+	steps := store.snapshotSteps()
+	require.NotEmpty(t, steps, "step 仍应正常落库（仅 message_id 关联缺失）")
+	for _, s := range steps {
+		assert.Equal(t, "", s.MessageID,
+			"D14 降级：未注入时 step.MessageID 应为空串（event_type=%s）", s.EventType)
+	}
+}
