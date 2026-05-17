@@ -42,6 +42,14 @@ func OK(c *gin.Context, data interface{}) {
 	})
 }
 
+// NoContent 返回 204 No Content（无响应体）。
+//
+// AI 会话删除等"幂等成功且无数据返回"的场景使用，spec ai-session
+// "删除自有会话 → 204 No Content" 强制语义。
+func NoContent(c *gin.Context) {
+	c.Status(http.StatusNoContent)
+}
+
 // Page 分页成功响应。
 func Page(c *gin.Context, list interface{}, total int64, page, size int) {
 	OK(c, PageData{List: list, Total: total, Page: page, Size: size})

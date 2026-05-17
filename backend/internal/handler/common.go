@@ -12,6 +12,9 @@ import (
 )
 
 // userIDFromHeader 从 X-User-Id 取用户 ID（默认 1）。
+//
+// 普通业务路由（asset/holding/transaction 等）继续依赖该 fallback=1 行为。
+// AI 路由请改用 requireUserIDFromHeader（D15 强校验，缺失返 401）。
 func userIDFromHeader(c *gin.Context) uint {
 	if v := c.GetHeader("X-User-Id"); v != "" {
 		if id, err := strconv.ParseUint(v, 10, 64); err == nil && id > 0 {
@@ -19,6 +22,23 @@ func userIDFromHeader(c *gin.Context) uint {
 		}
 	}
 	return 1
+}
+
+// requireUserIDFromHeader 强校验 X-User-Id Header（D15）。
+//
+// AI 路由专用：缺失 / 非法 / 0 → 返 (0, false)，调用方应返 401 Unauthorized
+// （spec ai-session "未登录用户被拒绝"）。普通业务路由继续用 userIDFromHeader 的
+// fallback=1 路径。二阶段切 JWT 时升级该 helper 即可，调用方代码不变。
+func requireUserIDFromHeader(c *gin.Context) (uint, bool) {
+	v := c.GetHeader("X-User-Id")
+	if v == "" {
+		return 0, false
+	}
+	id, err := strconv.ParseUint(v, 10, 64)
+	if err != nil || id == 0 {
+		return 0, false
+	}
+	return uint(id), true
 }
 
 // queryUint 从 query 取无符号整数；失败返回 0。
