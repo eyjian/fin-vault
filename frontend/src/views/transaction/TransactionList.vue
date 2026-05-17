@@ -114,7 +114,16 @@ onMounted(async () => {
             <el-tag size="small">{{ txnTypeMap[row.txn_type] || row.txn_type }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="asset_id" label="资产ID" width="80" align="right" />
+        <el-table-column label="资产代码" width="120">
+          <template #default="{ row }">
+            {{ row.asset?.asset_code || row.asset_id }}
+          </template>
+        </el-table-column>
+        <el-table-column label="资产名称" min-width="140" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ row.asset?.name || '-' }}
+          </template>
+        </el-table-column>
         <el-table-column label="平台" width="140">
           <template #default="{ row }">{{ platformStore.nameOf(row.platform_id) }}</template>
         </el-table-column>

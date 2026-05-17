@@ -63,6 +63,7 @@ func (r *transactionRepo) List(ctx context.Context, opts repository.ListOptions)
 	}
 	var list []domain.Transaction
 	if err := tx.Order(order).
+		Preload("Asset").
 		Offset(opts.Offset()).Limit(opts.Limit()).Find(&list).Error; err != nil {
 		return nil, 0, err
 	}

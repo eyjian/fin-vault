@@ -140,6 +140,7 @@ export interface Transaction {
   external_id?: string
   note?: string
   created_at?: string
+  asset?: Asset
 }
 
 export interface PriceQuote {
