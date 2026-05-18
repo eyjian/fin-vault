@@ -2,8 +2,8 @@
 // 所有金额/数量字段统一字符串传输（保精度），前端用 decimal.js 处理。
 
 export type AssetType = 'fund' | 'stock' | 'wealth' | 'cash'
-export type HoldingStatus = 'holding' | 'closed' | 'matured'
-export type AssetStatus = 'active' | 'delisted' | 'matured'
+export type HoldingStatus = '持有中' | '已关闭' | '已到期'
+export type AssetStatus = '活跃' | '已退市' | '已到期'
 export type CostMethod = 'weighted_avg' | 'fifo'
 export type TxnType =
   | 'buy'
@@ -65,6 +65,20 @@ export interface WealthDetail {
   is_auto_renewal?: boolean
 }
 
+// 单个资产的持仓汇总（与后端 domain.HoldingSummary 对齐）
+export interface AssetHoldingSummary {
+  quantity: string
+  avg_cost: string
+  total_cost: string
+  realized_pnl: string
+  total_dividend: string
+  latest_price: string
+  market_value: string
+  unrealized_pnl: string
+  total_pnl: string
+  pnl_ratio: string
+}
+
 export interface Asset {
   id?: number
   user_id?: number
@@ -79,8 +93,21 @@ export interface Asset {
   fund_detail?: FundDetail | null
   stock_detail?: StockDetail | null
   wealth_detail?: WealthDetail | null
+  holding_summary?: AssetHoldingSummary | null
   created_at?: string
   updated_at?: string
+}
+
+// 组合层面的持仓汇总（与后端 service.HoldingSummary 对齐）
+export interface HoldingSummary {
+  display_currency: string
+  total_market_value: string
+  total_cost: string
+  total_pnl: string
+  pnl_ratio: string
+  by_type: { asset_type: AssetType; market_value: string; ratio: string }[]
+  by_platform: { platform_id: number; platform_name: string; market_value: string; ratio: string }[]
+  by_currency: { currency: string; market_value: string; ratio: string }[]
 }
 
 export interface Holding {
@@ -136,7 +163,7 @@ export interface Transaction {
   tax?: string
   net_amount?: string
   currency: string
-  source?: 'manual' | 'import' | 'auto_mature'
+  source?: '手动' | '导入' | '自动到期'
   external_id?: string
   note?: string
   created_at?: string
@@ -150,7 +177,7 @@ export interface PriceQuote {
   quote_time?: string
   change_pct?: string
   volume?: string
-  source?: 'manual' | 'api_sina' | 'api_tencent' | 'api_eastmoney'
+  source?: '手动' | '新浪' | '腾讯' | '东方财富'
 }
 
 export interface ExchangeRate {
@@ -159,7 +186,7 @@ export interface ExchangeRate {
   to_currency: string
   rate: string
   quote_date?: string
-  source?: 'manual' | 'pboc' | 'api'
+  source?: '手动' | '央行' | 'API'
 }
 
 export interface AISession {

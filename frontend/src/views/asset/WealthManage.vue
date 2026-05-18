@@ -43,7 +43,8 @@ async function fetchList() {
       page_size: filter.page_size,
       keyword: filter.keyword || undefined,
       status: filter.status || undefined,
-      maturing_within_days: filter.maturing_within_days || undefined
+      maturing_within_days: filter.maturing_within_days || undefined,
+      include_holdings: true
     })
     let arr = r?.items || r?.list || []
     if (filter.product_type) {
@@ -70,7 +71,7 @@ function emptyForm(): Asset {
     name: '',
     asset_type: 'wealth',
     currency: 'CNY',
-    status: 'active',
+    status: '活跃',
     issuer_platform_id: undefined,
     risk_level: 'R2',
     remark: '',
@@ -157,6 +158,32 @@ function openTxn(a: Asset) {
   txnDialog.value = true
 }
 
+// 盈亏格式化辅助函数
+function getPnlColor(val: string | number | null | undefined): string {
+  if (!val) return ''
+  const num = typeof val === 'string' ? parseFloat(val) : val
+  if (isNaN(num)) return ''
+  if (num > 0) return '#67C23A' // 绿色
+  if (num < 0) return '#F56C6C' // 红色
+  return ''
+}
+
+function formatPnl(val: string | number | null | undefined): string {
+  if (!val && val !== 0) return '-'
+  const num = typeof val === 'string' ? parseFloat(val) : val
+  if (isNaN(num)) return '-'
+  const prefix = num > 0 ? '+' : ''
+  return prefix + num.toFixed(2)
+}
+
+function formatPnlRatio(val: string | number | null | undefined): string {
+  if (!val && val !== 0) return '-'
+  const num = typeof val === 'string' ? parseFloat(val) : val
+  if (isNaN(num)) return '-'
+  const prefix = num > 0 ? '+' : ''
+  return prefix + (num * 100).toFixed(2) + '%'
+}
+
 const productTypeMap: Record<string, string> = {
   fixed_deposit: '定期',
   structured: '结构性',
@@ -206,8 +233,8 @@ const platformName = computed(() => (id?: number | null) => platformStore.nameOf
           @change="fetchList"
         />
         <el-select v-model="filter.status" placeholder="状态" clearable style="width: 120px;" @change="fetchList">
-          <el-option label="active" value="active" />
-          <el-option label="matured" value="matured" />
+          <el-option label="活跃" value="活跃" />
+          <el-option label="已到期" value="已到期" />
         </el-select>
         <el-button type="primary" @click="fetchList">查询</el-button>
         <div class="fv-grow" />
@@ -241,7 +268,50 @@ const platformName = computed(() => (id?: number | null) => platformStore.nameOf
           <template #default="{ row }">{{ row.wealth_detail?.end_date?.slice(0,10) || '-' }}</template>
         </el-table-column>
         <el-table-column label="期限(天)" width="100" align="right" prop="wealth_detail.term_days" />
-        <el-table-column label="起购金额" width="120" align="right">
+        <el-table-column label="持有份额" width="100" align="right">
+          <template #default="{ row }">{{ row.holding_summary?.quantity || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="平均成本" width="100" align="right">
+          <template #default="{ row }">{{ row.holding_summary?.avg_cost || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="最新净值" width="100" align="right">
+          <template #default="{ row }">{{ row.holding_summary?.latest_price || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="市值" width="100" align="right">
+          <template #default="{ row }">{{ row.holding_summary?.market_value || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="未实现盈亏" width="120" align="right">
+          <template #default="{ row }">
+            <span :style="{ color: getPnlColor(row.holding_summary?.unrealized_pnl) }">
+              {{ formatPnl(row.holding_summary?.unrealized_pnl) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="总盈亏" width="120" align="right">
+          <template #default="{ row }">
+            <span :style="{ color: getPnlColor(row.holding_summary?.total_pnl) }">
+              {{ formatPnl(row.holding_summary?.total_pnl) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="盈亏比率" width="100" align="right">
+          <template #default="{ row }">
+            <span :style="{ color: getPnlColor(row.holding_summary?.pnl_ratio) }">
+              {{ formatPnlRatio(row.holding_summary?.pnl_ratio) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="已实现盈亏" width="120" align="right">
+          <template #default="{ row }">
+            <span :style="{ color: getPnlColor(row.holding_summary?.realized_pnl) }">
+              {{ formatPnl(row.holding_summary?.realized_pnl) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="累计利息" width="100" align="right">
+          <template #default="{ row }">{{ row.holding_summary?.total_dividend || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="发行平台" width="160">
           <template #default="{ row }">{{ row.wealth_detail?.min_amount || '-' }}</template>
         </el-table-column>
         <el-table-column label="发行平台" width="160">

@@ -50,7 +50,7 @@ func Test_HoldingQuery_Success(t *testing.T) {
 	out, err := callTool(ctx, t, tool, HoldingQueryArgs{
 		AssetType:  "fund",
 		PlatformID: 5,
-		Status:     "holding",
+		Status:     domain.HoldingStatusHolding,
 	})
 	require.NoError(t, err)
 	require.Contains(t, out, `"count":1`)

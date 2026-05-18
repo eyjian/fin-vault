@@ -59,7 +59,7 @@ function emptyForm(): Asset {
     name: '',
     asset_type: 'fund',
     currency: 'CNY',
-    status: 'active',
+    status: '活跃',
     issuer_platform_id: undefined,
     risk_level: '',
     remark: '',
@@ -142,7 +142,7 @@ async function refreshAll() {
   refreshing.value = true
   try {
     const ids = list.value.map((a) => a.id!).filter(Boolean) as number[]
-    const res = await quoteApi.refresh({ asset_ids: ids, source: 'auto' })
+    const res = await quoteApi.refresh({ asset_ids: ids, source: '自动' })
     const ok = (res || []).filter((r) => r.ok).length
     ElMessage.success(`刷新完成：成功 ${ok} / ${res?.length || 0}`)
     fetchList()
@@ -195,8 +195,8 @@ const platformName = computed(() => (id?: number | null) => platformStore.nameOf
           @keyup.enter="fetchList"
         />
         <el-select v-model="filter.status" placeholder="状态" clearable style="width: 140px;" @change="fetchList">
-          <el-option label="active" value="active" />
-          <el-option label="delisted" value="delisted" />
+          <el-option label="活跃" value="活跃" />
+          <el-option label="已退市" value="已退市" />
         </el-select>
         <el-button type="primary" @click="fetchList">查询</el-button>
         <div class="fv-grow" />
@@ -228,7 +228,7 @@ const platformName = computed(() => (id?: number | null) => platformStore.nameOf
         <el-table-column prop="currency" label="币种" width="70" />
         <el-table-column label="状态" width="80">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.status === 'active' ? 'success' : 'info'">{{ row.status }}</el-tag>
+            <el-tag size="small" :type="row.status === '活跃' ? 'success' : 'info'">{{ row.status }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="320" fixed="right">

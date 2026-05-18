@@ -8,6 +8,7 @@ import (
 	sdktool "trpc.group/trpc-go/trpc-agent-go/tool"
 	sdkfunction "trpc.group/trpc-go/trpc-agent-go/tool/function"
 
+	"github.com/eyjian/fin-vault/backend/internal/domain"
 	"github.com/eyjian/fin-vault/backend/internal/repository"
 	"github.com/eyjian/fin-vault/backend/pkg/errs"
 )
@@ -59,7 +60,7 @@ func NewPlatformSummaryTool(deps PlatformSummaryDeps) sdktool.CallableTool {
 				UserID:   uid,
 				Page:     1,
 				PageSize: platformSummaryPageSize,
-				Filters:  map[string]any{"status": "holding"},
+				Filters:  map[string]any{"status": domain.HoldingStatusHolding},
 			})
 			if err != nil {
 				return PlatformSummaryOutput{}, fmt.Errorf("list holdings failed: %w", err)

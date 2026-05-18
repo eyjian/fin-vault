@@ -90,7 +90,7 @@ CREATE TABLE `t_fv_user_users` (
   `f_display_name` varchar(64) DEFAULT NULL COMMENT '显示名',
   `f_email` varchar(128) DEFAULT NULL,
   `f_default_currency` varchar(10) NOT NULL DEFAULT 'CNY' COMMENT '默认展示币种',
-  `f_status` varchar(20) NOT NULL DEFAULT 'active' COMMENT 'active/disabled',
+  `f_status` varchar(20) NOT NULL DEFAULT '活跃' COMMENT '活跃/禁用',
   `f_created_at` datetime NOT NULL,
   `f_updated_at` datetime NOT NULL,
   `f_deleted_at` datetime DEFAULT NULL,
@@ -110,7 +110,7 @@ CREATE TABLE `t_fv_dict_platforms` (
   `f_platform_type` varchar(20) NOT NULL COMMENT 'bank/fund_platform/broker/internet',
   `f_icon_url` varchar(255) DEFAULT NULL,
   `f_is_system` tinyint(1) NOT NULL DEFAULT '0' COMMENT '是否系统预置',
-  `f_status` varchar(20) NOT NULL DEFAULT 'active',
+  `f_status` varchar(20) NOT NULL DEFAULT '活跃',
   `f_created_at` datetime NOT NULL,
   `f_updated_at` datetime NOT NULL,
   PRIMARY KEY (`f_id`),
@@ -131,7 +131,7 @@ CREATE TABLE `t_fv_core_assets` (
   `f_currency` varchar(10) NOT NULL DEFAULT 'CNY',
   `f_issuer_platform_id` bigint unsigned DEFAULT NULL COMMENT '发行平台 ID',
   `f_risk_level` varchar(20) DEFAULT NULL COMMENT 'R1-R5',
-  `f_status` varchar(20) NOT NULL DEFAULT 'active' COMMENT 'active/delisted/matured',
+  `f_status` varchar(20) NOT NULL DEFAULT '活跃' COMMENT '活跃/已退市/已到期',
   `f_remark` varchar(500) DEFAULT NULL,
   `f_created_at` datetime NOT NULL,
   `f_updated_at` datetime NOT NULL,
@@ -219,7 +219,7 @@ CREATE TABLE `t_fv_core_holdings` (
   `f_cost_method` varchar(20) NOT NULL DEFAULT 'weighted_avg' COMMENT 'weighted_avg/fifo',
   `f_first_buy_at` datetime DEFAULT NULL,
   `f_last_txn_at` datetime DEFAULT NULL,
-  `f_status` varchar(20) NOT NULL DEFAULT 'holding' COMMENT 'holding/closed/matured',
+  `f_status` varchar(20) NOT NULL DEFAULT '持有中' COMMENT '持有中/已关闭/已到期',
   `f_created_at` datetime NOT NULL,
   `f_updated_at` datetime NOT NULL,
   `f_deleted_at` datetime DEFAULT NULL,
@@ -249,7 +249,7 @@ CREATE TABLE `t_fv_core_transactions` (
   `f_tax` decimal(20,2) NOT NULL DEFAULT '0',
   `f_net_amount` decimal(20,2) NOT NULL COMMENT '买:amount+fee+tax 卖:amount-fee-tax',
   `f_currency` varchar(10) NOT NULL DEFAULT 'CNY',
-  `f_source` varchar(20) NOT NULL DEFAULT 'manual' COMMENT 'manual/import/auto_mature',
+  `f_source` varchar(20) NOT NULL DEFAULT '手动' COMMENT '手动/导入/自动到期',
   `f_external_id` varchar(64) DEFAULT NULL COMMENT '外部订单号防重',
   `f_note` varchar(500) DEFAULT NULL,
   `f_created_at` datetime NOT NULL,
@@ -275,7 +275,7 @@ CREATE TABLE `t_fv_quote_price_quotes` (
   `f_quote_time` datetime NOT NULL,
   `f_change_pct` decimal(10,4) DEFAULT NULL COMMENT '当日涨跌幅（%）',
   `f_volume` decimal(20,2) DEFAULT NULL,
-  `f_source` varchar(20) NOT NULL DEFAULT 'manual',
+  `f_source` varchar(20) NOT NULL DEFAULT '手动',
   `f_created_at` datetime NOT NULL,
   PRIMARY KEY (`f_id`),
   KEY `idx_asset_time` (`f_asset_id`, `f_quote_time` DESC)
@@ -291,7 +291,7 @@ CREATE TABLE `t_fv_quote_exchange_rates` (
   `f_to_currency` varchar(10) NOT NULL,
   `f_rate` decimal(12,6) NOT NULL COMMENT '1 from = rate × to',
   `f_quote_date` date NOT NULL,
-  `f_source` varchar(20) NOT NULL DEFAULT 'manual',
+  `f_source` varchar(20) NOT NULL DEFAULT '手动',
   `f_created_at` datetime NOT NULL,
   PRIMARY KEY (`f_id`),
   UNIQUE KEY `uk_pair_date_source` (`f_from_currency`, `f_to_currency`, `f_quote_date`, `f_source`),
@@ -491,9 +491,9 @@ const (
 type HoldingStatus string
 
 const (
-    HoldingStatusHolding HoldingStatus = "holding"
-    HoldingStatusClosed  HoldingStatus = "closed"
-    HoldingStatusMatured HoldingStatus = "matured"
+    HoldingStatusHolding HoldingStatus = "持有中"
+    HoldingStatusClosed  HoldingStatus = "已关闭"
+    HoldingStatusMatured HoldingStatus = "已到期"
 )
 
 
@@ -792,7 +792,7 @@ type Report struct {
 
 ```sql
 INSERT INTO t_fv_user_users (f_id, f_username, f_password_hash, f_display_name, f_default_currency, f_status, f_created_at, f_updated_at)
-VALUES (1, 'admin', '$2a$10$...', '本地用户', 'CNY', 'active', NOW(), NOW());
+VALUES (1, 'admin', '$2a$10$...', '本地用户', 'CNY', '活跃', NOW(), NOW());
 ```
 
 > 第一阶段单用户固定 ID=1，前端不开放注册登录页面。`f_password_hash` 使用 bcrypt 生成（即使本地阶段不验证，也保留字段，便于后期开启认证）。
@@ -801,27 +801,27 @@ VALUES (1, 'admin', '$2a$10$...', '本地用户', 'CNY', 'active', NOW(), NOW())
 
 ```sql
 INSERT INTO t_fv_dict_platforms (f_code, f_name, f_platform_type, f_is_system, f_status, f_created_at, f_updated_at) VALUES
-('zsbank',     '招商银行APP',  'bank',           1, 'active', NOW(), NOW()),
-('icbc',       '工商银行APP',  'bank',           1, 'active', NOW(), NOW()),
-('abc',        '农业银行APP',  'bank',           1, 'active', NOW(), NOW()),
-('ccb',        '建设银行APP',  'bank',           1, 'active', NOW(), NOW()),
-('boc',        '中国银行APP',  'bank',           1, 'active', NOW(), NOW()),
-('ttfund',     '天天基金',     'fund_platform',  1, 'active', NOW(), NOW()),
-('futu',       '富途牛牛',     'broker',         1, 'active', NOW(), NOW()),
-('tiger',      '老虎证券',     'broker',         1, 'active', NOW(), NOW()),
-('licai_tong', '理财通',       'internet',       1, 'active', NOW(), NOW()),
-('alipay',     '支付宝',       'internet',       1, 'active', NOW(), NOW()),
-('wechat',     '微信支付',     'internet',       1, 'active', NOW(), NOW());
+('zsbank',     '招商银行APP',  'bank',           1, '活跃', NOW(), NOW()),
+('icbc',       '工商银行APP',  'bank',           1, '活跃', NOW(), NOW()),
+('abc',        '农业银行APP',  'bank',           1, '活跃', NOW(), NOW()),
+('ccb',        '建设银行APP',  'bank',           1, '活跃', NOW(), NOW()),
+('boc',        '中国银行APP',  'bank',           1, '活跃', NOW(), NOW()),
+('ttfund',     '天天基金',     'fund_platform',  1, '活跃', NOW(), NOW()),
+('futu',       '富途牛牛',     'broker',         1, '活跃', NOW(), NOW()),
+('tiger',      '老虎证券',     'broker',         1, '活跃', NOW(), NOW()),
+('licai_tong', '理财通',       'internet',       1, '活跃', NOW(), NOW()),
+('alipay',     '支付宝',       'internet',       1, '活跃', NOW(), NOW()),
+('wechat',     '微信支付',     'internet',       1, '活跃', NOW(), NOW());
 ```
 
 ### 4.3 默认汇率（手动维护一份基础数据）
 
 ```sql
 INSERT INTO t_fv_quote_exchange_rates (f_from_currency, f_to_currency, f_rate, f_quote_date, f_source, f_created_at) VALUES
-('USD', 'CNY', 7.200000, CURDATE(), 'manual', NOW()),
-('HKD', 'CNY', 0.920000, CURDATE(), 'manual', NOW()),
-('EUR', 'CNY', 7.800000, CURDATE(), 'manual', NOW()),
-('JPY', 'CNY', 0.048000, CURDATE(), 'manual', NOW());
+('USD', 'CNY', 7.200000, CURDATE(), '手动', NOW()),
+('HKD', 'CNY', 0.920000, CURDATE(), '手动', NOW()),
+('EUR', 'CNY', 7.800000, CURDATE(), '手动', NOW()),
+('JPY', 'CNY', 0.048000, CURDATE(), '手动', NOW());
 ```
 
 ---

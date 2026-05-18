@@ -126,7 +126,7 @@ func (s *QuoteService) Refresh(ctx context.Context, userID uint, assetIDs []uint
 				UserID:   userID,
 				Page:     1,
 				PageSize: 500,
-				Filters:  map[string]any{"asset_type": string(t), "status": "active"},
+				Filters:  map[string]any{"asset_type": string(t), "status": domain.StatusActive},
 			})
 			if err != nil {
 				return nil, err

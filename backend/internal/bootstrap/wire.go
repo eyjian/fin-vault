@@ -101,8 +101,8 @@ func Wire(cfg *Config) (*App, error) {
 	// 6. Tools 注册由 §9 装配阶段完成（agent.NewToolsetAgentFactory + Runner 装配）。
 
 	// 7. Services
-	assetSvc := service.NewAssetService(repos.UoW, repos.Asset, repos.Platform)
 	holdingSvc := service.NewHoldingService(repos.Holding, repos.Asset, repos.Quote, repos.Rate, repos.Platform)
+	assetSvc := service.NewAssetService(repos.UoW, repos.Asset, repos.Platform, holdingSvc)
 	txnSvc := service.NewTransactionService(repos.UoW, repos.Transaction, repos.Holding, repos.Asset)
 	quoteSvc := service.NewQuoteService(repos.Quote, repos.Asset, cacheProv, aggregator, cfg.Quote.CacheTTL)
 	rateSvc := service.NewRateService(repos.Rate)

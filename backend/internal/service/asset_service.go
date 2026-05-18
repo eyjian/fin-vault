@@ -20,19 +20,27 @@ type AssetService struct {
 	uow          repository.UnitOfWork
 	assetRepo    repository.AssetRepository
 	platformRepo repository.PlatformRepository
+	holdingSvc   *HoldingService // 用于获取持仓汇总数据
 }
 
 // NewAssetService 构造资产服务。
+//
+// holdingSvc 为可选参数（使用可变参数保持向后兼容）。
 func NewAssetService(
 	uow repository.UnitOfWork,
 	assetRepo repository.AssetRepository,
 	platformRepo repository.PlatformRepository,
+	holdingSvc ...*HoldingService,
 ) *AssetService {
-	return &AssetService{
+	s := &AssetService{
 		uow:          uow,
 		assetRepo:    assetRepo,
 		platformRepo: platformRepo,
 	}
+	if len(holdingSvc) > 0 {
+		s.holdingSvc = holdingSvc[0]
+	}
+	return s
 }
 
 // CreateAssetInput 创建资产入参。
@@ -252,17 +260,21 @@ func (s *AssetService) Get(ctx context.Context, userID, id uint) (*domain.Asset,
 
 // AssetListInput 列表查询入参。
 type AssetListInput struct {
-	UserID    uint
-	AssetType domain.AssetType
-	Status    string
-	Currency  string
-	Keyword   string
-	Page      int
-	PageSize  int
+	UserID         uint
+	AssetType      domain.AssetType
+	Status         string
+	Currency       string
+	Keyword        string
+	Page           int
+	PageSize       int
+	IncludeHoldings bool // 是否包含持仓和盈亏数据
 }
 
 // List 列出资产。
 func (s *AssetService) List(ctx context.Context, in AssetListInput) ([]domain.Asset, int64, error) {
+	if in.UserID == 0 {
+		return nil, 0, errs.ErrInvalidParam.WithMsg("user_id required")
+	}
 	opts := repository.ListOptions{
 		UserID:   in.UserID,
 		Page:     in.Page,
@@ -285,6 +297,17 @@ func (s *AssetService) List(ctx context.Context, in AssetListInput) ([]domain.As
 	if err != nil {
 		return nil, 0, errs.ErrDB.WithCause(err)
 	}
+
+	// 如果需要包含持仓数据，为每个资产加载持仓汇总
+	if in.IncludeHoldings && s.holdingSvc != nil {
+		for i := range list {
+			summary, err := s.holdingSvc.GetSummaryByAsset(ctx, in.UserID, list[i].ID)
+			if err == nil && summary != nil {
+				list[i].HoldingSummary = summary
+			}
+		}
+	}
+
 	return list, total, nil
 }
 

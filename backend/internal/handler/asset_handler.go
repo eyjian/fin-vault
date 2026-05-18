@@ -133,13 +133,14 @@ func (h *AssetHandler) get(c *gin.Context) {
 
 func (h *AssetHandler) list(c *gin.Context) {
 	in := service.AssetListInput{
-		UserID:    userIDFromHeader(c),
-		AssetType: domain.AssetType(c.Query("asset_type")),
-		Status:    c.Query("status"),
-		Currency:  c.Query("currency"),
-		Keyword:   c.Query("keyword"),
-		Page:      queryInt(c, "page", 1),
-		PageSize:  queryInt(c, "page_size", 20),
+		UserID:         userIDFromHeader(c),
+		AssetType:      domain.AssetType(c.Query("asset_type")),
+		Status:         c.Query("status"),
+		Currency:       c.Query("currency"),
+		Keyword:        c.Query("keyword"),
+		Page:           queryInt(c, "page", 1),
+		PageSize:       queryInt(c, "page_size", 20),
+		IncludeHoldings: c.Query("include_holdings") == "true",
 	}
 	list, total, err := h.svc.List(c.Request.Context(), in)
 	if err != nil {

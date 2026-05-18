@@ -9,6 +9,7 @@ export interface HoldingListParams {
   platform_id?: number
   status?: string
   display_currency?: 'raw' | 'CNY'
+  [key: string]: unknown
 }
 
 export const holdingApi = {

@@ -68,21 +68,21 @@ const (
 type HoldingStatus string
 
 const (
-	HoldingStatusHolding HoldingStatus = "holding"
-	HoldingStatusClosed  HoldingStatus = "closed"
-	HoldingStatusMatured HoldingStatus = "matured"
+	HoldingStatusHolding HoldingStatus = "持有中"
+	HoldingStatusClosed  HoldingStatus = "已关闭"
+	HoldingStatusMatured HoldingStatus = "已到期"
 )
 
 // === 通用状态枚举 ===
 
 const (
-	StatusActive    = "active"
-	StatusInactive  = "inactive"
-	StatusDisabled  = "disabled"
-	StatusDelisted  = "delisted"
-	StatusMatured   = "matured"
-	StatusArchived  = "archived"
-	StatusDeleted   = "deleted"
+	StatusActive    = "活跃"
+	StatusInactive  = "停用"
+	StatusDisabled  = "禁用"
+	StatusDelisted  = "已退市"
+	StatusMatured   = "已到期"
+	StatusArchived  = "已归档"
+	StatusDeleted   = "已删除"
 )
 
 // === 平台类型 ===
@@ -97,24 +97,24 @@ const (
 // === 交易来源 ===
 
 const (
-	TxnSourceManual      = "manual"
-	TxnSourceImport      = "import"
-	TxnSourceAutoMature  = "auto_mature"
+	TxnSourceManual      = "手动"
+	TxnSourceImport      = "导入"
+	TxnSourceAutoMature  = "自动到期"
 )
 
 // === 行情来源 ===
 
 const (
-	QuoteSourceManual    = "manual"
-	QuoteSourceEastmoney = "api_eastmoney"
-	QuoteSourceSina      = "api_sina"
-	QuoteSourceTencent   = "api_tencent"
+	QuoteSourceManual    = "手动"
+	QuoteSourceEastmoney = "东方财富"
+	QuoteSourceSina      = "新浪"
+	QuoteSourceTencent   = "腾讯"
 )
 
 // === 汇率来源 ===
 
 const (
-	RateSourceManual = "manual"
-	RateSourcePBOC   = "pboc"
-	RateSourceAPI    = "api"
+	RateSourceManual = "手动"
+	RateSourcePBOC   = "央行"
+	RateSourceAPI    = "API"
 )

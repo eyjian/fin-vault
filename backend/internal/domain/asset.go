@@ -16,13 +16,30 @@ type Asset struct {
 	Currency         string    `gorm:"size:10;not null;default:CNY;column:f_currency" json:"currency"`
 	IssuerPlatformID *uint     `gorm:"index:idx_issuer;column:f_issuer_platform_id" json:"issuer_platform_id,omitempty"`
 	RiskLevel        string    `gorm:"size:20;column:f_risk_level" json:"risk_level"`
-	Status           string    `gorm:"size:20;not null;default:active;index:idx_user_type_status,priority:3;column:f_status" json:"status"`
+	Status           string    `gorm:"size:20;not null;default:活跃;index:idx_user_type_status,priority:3;column:f_status" json:"status"`
 	Remark           string    `gorm:"size:500;column:f_remark" json:"remark"`
 
 	// 关联实体（按需 Preload）
 	FundDetail   *FundDetail   `gorm:"foreignKey:AssetID;references:ID" json:"fund_detail,omitempty"`
 	StockDetail  *StockDetail  `gorm:"foreignKey:AssetID;references:ID" json:"stock_detail,omitempty"`
 	WealthDetail *WealthDetail `gorm:"foreignKey:AssetID;references:ID" json:"wealth_detail,omitempty"`
+
+	// 持仓汇总数据（不入库，仅用于 API 响应）
+	HoldingSummary *HoldingSummary `gorm:"-" json:"holding_summary,omitempty"`
+}
+
+// HoldingSummary 持仓汇总数据（一个资产可能在多个平台有持仓，此结构存储汇总值）。
+type HoldingSummary struct {
+	Quantity       decimal.Decimal `json:"quantity"`        // 总持有数量（股数/份额/金额）
+	AvgCost        decimal.Decimal `json:"avg_cost"`        // 平均成本
+	TotalCost      decimal.Decimal `json:"total_cost"`      // 总成本
+	RealizedPnL    decimal.Decimal `json:"realized_pnl"`    // 已实现盈亏
+	TotalDividend  decimal.Decimal `json:"total_dividend"`  // 累计分红/利息
+	LatestPrice    decimal.Decimal `json:"latest_price"`    // 最新价/净值
+	MarketValue    decimal.Decimal `json:"market_value"`    // 市值
+	UnrealizedPnL  decimal.Decimal `json:"unrealized_pnl"`  // 未实现盈亏
+	TotalPnL       decimal.Decimal `json:"total_pnl"`       // 总盈亏
+	PnLRatio       decimal.Decimal `json:"pnl_ratio"`       // 盈亏比率
 }
 
 // TableName 显式表名。

@@ -11,7 +11,7 @@ import MoneyInput from '@/components/MoneyInput.vue'
 const list = ref<Asset[]>([])
 const refreshing = ref(false)
 
-const refreshSource = ref<'auto' | 'eastmoney' | 'sina' | 'tencent'>('auto')
+const refreshSource = ref<'自动' | '东方财富' | '新浪' | '腾讯'>('自动')
 
 async function loadAssets() {
   try {
@@ -43,7 +43,7 @@ const manualForm = reactive({
   price: '',
   change_pct: '',
   volume: '',
-  source: 'manual'
+  source: '手动'
 })
 async function submitManual() {
   if (!manualForm.asset_id || !manualForm.price) {
@@ -55,7 +55,7 @@ async function submitManual() {
     price: manualForm.price,
     change_pct: manualForm.change_pct,
     volume: manualForm.volume,
-    source: 'manual'
+    source: '手动'
   })
   ElMessage.success('已写入')
   manualVisible.value = false
@@ -69,10 +69,10 @@ onMounted(loadAssets)
     <div class="fv-card">
       <div class="fv-flex" style="margin-bottom: 12px;">
         <el-select v-model="refreshSource" style="width: 160px;">
-          <el-option label="自动 (按优先级)" value="auto" />
-          <el-option label="东方财富" value="eastmoney" />
-          <el-option label="新浪" value="sina" />
-          <el-option label="腾讯" value="tencent" />
+          <el-option label="自动 (按优先级)" value="自动" />
+          <el-option label="东方财富" value="东方财富" />
+          <el-option label="新浪" value="新浪" />
+          <el-option label="腾讯" value="腾讯" />
         </el-select>
         <el-button type="primary" :icon="Refresh" :loading="refreshing" @click="refreshAll">
           刷新全部行情（{{ list.length }} 项）

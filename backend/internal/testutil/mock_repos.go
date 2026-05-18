@@ -519,3 +519,98 @@ func (m *MockTransactionRepo) ExistsByExternalID(_ context.Context, userID, plat
 	}
 	return false, nil
 }
+
+// =====================================================================
+// MockPlatformRepo
+// =====================================================================
+
+// MockPlatformRepo 平台字典仓储 mock。
+type MockPlatformRepo struct {
+	mu     sync.Mutex
+	ByID   map[uint]*domain.Platform
+	ByCode map[string]*domain.Platform
+}
+
+// NewMockPlatformRepo 构造。
+func NewMockPlatformRepo() *MockPlatformRepo {
+	return &MockPlatformRepo{
+		ByID:   make(map[uint]*domain.Platform),
+		ByCode: make(map[string]*domain.Platform),
+	}
+}
+
+// SetPlatform 注入测试数据。
+func (m *MockPlatformRepo) SetPlatform(p *domain.Platform) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ByID[p.ID] = p
+	m.ByCode[p.Code] = p
+}
+
+// List 实现接口。
+func (m *MockPlatformRepo) List(_ context.Context) ([]domain.Platform, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]domain.Platform, 0, len(m.ByID))
+	for _, p := range m.ByID {
+		out = append(out, *p)
+	}
+	return out, nil
+}
+
+// GetByID 实现接口。
+func (m *MockPlatformRepo) GetByID(_ context.Context, id uint) (*domain.Platform, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.ByID[id]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return p, nil
+}
+
+// GetByCode 实现接口。
+func (m *MockPlatformRepo) GetByCode(_ context.Context, code string) (*domain.Platform, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.ByCode[code]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return p, nil
+}
+
+// Create 实现接口。
+func (m *MockPlatformRepo) Create(_ context.Context, p *domain.Platform) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p.ID == 0 {
+		p.ID = uint(len(m.ByID) + 1)
+	}
+	m.ByID[p.ID] = p
+	m.ByCode[p.Code] = p
+	return nil
+}
+
+// Update 实现接口。
+func (m *MockPlatformRepo) Update(_ context.Context, p *domain.Platform) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.ByID[p.ID]; !ok {
+		return repository.ErrNotFound
+	}
+	m.ByID[p.ID] = p
+	m.ByCode[p.Code] = p
+	return nil
+}
+
+// Delete 实现接口。
+func (m *MockPlatformRepo) Delete(_ context.Context, id uint) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p, ok := m.ByID[id]; ok {
+		delete(m.ByCode, p.Code)
+	}
+	delete(m.ByID, id)
+	return nil
+}

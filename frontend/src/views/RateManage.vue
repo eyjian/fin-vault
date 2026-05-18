@@ -45,7 +45,7 @@ const form = reactive<ExchangeRate>({
   to_currency: 'CNY',
   rate: '',
   quote_date: new Date().toISOString().slice(0, 10),
-  source: 'manual'
+  source: '手动'
 })
 
 async function submit() {

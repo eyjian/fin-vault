@@ -8,6 +8,7 @@ import (
 	sdktool "trpc.group/trpc-go/trpc-agent-go/tool"
 	sdkfunction "trpc.group/trpc-go/trpc-agent-go/tool/function"
 
+	"github.com/eyjian/fin-vault/backend/internal/domain"
 	"github.com/eyjian/fin-vault/backend/internal/repository"
 	"github.com/eyjian/fin-vault/backend/pkg/errs"
 )
@@ -62,7 +63,7 @@ func NewProfitCalcTool(deps ProfitCalcDeps) sdktool.CallableTool {
 			if !ok {
 				return ProfitCalcOutput{}, fmt.Errorf("user_id not in context: %w", errs.ErrAIToolCallFailed)
 			}
-			filters := map[string]any{"status": "holding"}
+			filters := map[string]any{"status": domain.HoldingStatusHolding}
 			if args.AssetType != "" {
 				filters["asset_type"] = args.AssetType
 			}

@@ -10,7 +10,7 @@ database:
   driver: "sqlite"        # sqlite / mysql / postgres
   dsn: "data/finvault.db"
   auto_migrate: true
-  log_level: "warn"       # silent/error/warn/info
+  log_level: "info"       # silent/error/warn/info
   max_idle_conns: 10
   max_open_conns: 50
   conn_max_lifetime: 1h

@@ -3,7 +3,7 @@ import type { PriceQuote } from './types'
 
 export interface RefreshReq {
   asset_ids?: number[]
-  source?: 'auto' | 'eastmoney' | 'sina' | 'tencent'
+  source?: '自动' | '东方财富' | '新浪' | '腾讯'
 }
 
 export interface RefreshResult {
