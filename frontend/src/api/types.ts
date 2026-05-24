@@ -232,3 +232,46 @@ export interface SendResp {
   tool_calls: ToolCallDTO[]
   token_usage: TokenUsage
 }
+
+// =====================================================================
+// AI 把脉（spec ai-pulse-diagnosis）
+// =====================================================================
+
+// 把脉建议（与后端 domain.PulseRecommendation 对齐）：
+//   - sell   建议卖出
+//   - reduce 建议减仓
+//   - hold   继续持有
+//   - add    建议加仓
+export type PulseRecommendation = 'sell' | 'reduce' | 'hold' | 'add'
+
+// 把脉置信度（与后端 domain.PulseConfidence 对齐）：
+//   - high   数据充分、信号明确
+//   - medium 数据较完整但存在不确定性
+//   - low    数据不足或市场信号矛盾，UI 显示"请谨慎参考"提示
+export type PulseConfidence = 'high' | 'medium' | 'low'
+
+// 把脉触发方式（与后端 domain.PulseTriggerSource 对齐）：
+//   - manual    资产管理页面手动触发
+//   - chat      AI 对话中工具调用触发
+//   - scheduled 定时任务触发（未来扩展）
+export type PulseTriggerSource = 'manual' | 'chat' | 'scheduled'
+
+// 单个资产的把脉结果（与后端 handler.PulseDiagnoseItemDTO 对齐）。
+// status：success 表示把脉成功（含数据不足兜底）；failed 表示底层错误（资产不存在 / LLM 异常等）。
+export interface PulseDiagnosisResult {
+  asset_id: number
+  recommendation?: PulseRecommendation
+  confidence?: PulseConfidence
+  summary?: string
+  detail?: string
+  session_id?: string
+  trigger_source?: PulseTriggerSource
+  diagnosed_at?: string // RFC3339；前端用它计算"距今 N 天"
+  status: 'success' | 'failed'
+  error_message?: string
+}
+
+// POST /api/v1/ai/pulse-diagnosis 与 GET 接口的统一响应体。
+export interface PulseDiagnosisResp {
+  items: PulseDiagnosisResult[]
+}

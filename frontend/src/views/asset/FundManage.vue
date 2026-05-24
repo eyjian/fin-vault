@@ -9,11 +9,13 @@ import { assetApi } from '@/api/asset'
 import { quoteApi } from '@/api/quote'
 import type { Asset, FundDetail } from '@/api/types'
 import MoneyInput from '@/components/MoneyInput.vue'
+import PulseDiagnosisCell from '@/components/PulseDiagnosisCell.vue'
 import TxnDialog from '@/components/TxnDialog.vue'
+import { usePulseDiagnosis } from '@/composables/usePulseDiagnosis'
 import { usePlatformStore } from '@/stores/platform'
-import { Delete, Edit, Money, Plus, Refresh } from '@element-plus/icons-vue'
+import { Delete, Edit, MagicStick, Money, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 const platformStore = usePlatformStore()
@@ -28,6 +30,16 @@ const list = ref<Asset[]>([])
 const total = ref(0)
 const loading = ref(false)
 const filter = reactive({ keyword: '', status: '' as string, page: 1, page_size: 20 })
+
+// AI 把脉（spec ai-pulse-diagnosis）。
+// preload：页面加载 / 列表变化后拉到缓存；diagnose：手动触发。
+const pulse = usePulseDiagnosis()
+
+// 多选选中的资产，用于工具栏“批量AI把脉”
+const selectedRows = ref<Asset[]>([])
+function onSelectionChange(rows: Asset[]) {
+  selectedRows.value = rows
+}
 
 async function fetchList() {
   loading.value = true
@@ -47,6 +59,40 @@ async function fetchList() {
   } finally {
     loading.value = false
   }
+}
+
+// 拉取列表后预加载该页资产的把脉缓存（GET，不消耗 token）。
+watch(
+  list,
+  (arr) => {
+    const ids = (arr || []).map((a) => a.id!).filter(Boolean) as number[]
+    if (ids.length > 0) pulse.preload(ids)
+  },
+  { flush: 'post' }
+)
+
+// 单资产把脉
+async function diagnoseOne(assetId: number) {
+  await pulse.diagnose([assetId])
+}
+
+// 批量把脉（工具栏调用）
+async function diagnoseSelected() {
+  const ids = selectedRows.value.map((r) => r.id!).filter(Boolean) as number[]
+  if (ids.length === 0) {
+    ElMessage.warning('请先勾选需要把脉的资产')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `将对 ${ids.length} 个资产发起 AI 把脉（会消耗 token），是否继续？`,
+      'AI 把脉确认',
+      { type: 'info', confirmButtonText: '确认', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  await pulse.diagnose(ids)
 }
 
 // 盈亏格式化辅助函数
@@ -228,10 +274,35 @@ const platformName = computed(() => (id?: number | null) => platformStore.nameOf
         <el-button type="primary" @click="fetchList">查询</el-button>
         <div class="fv-grow" />
         <el-button :icon="Refresh" :loading="refreshing" @click="refreshAll">刷新净值</el-button>
+        <el-button
+          :icon="MagicStick"
+          :loading="pulse.state.batchRunning"
+          :disabled="selectedRows.length === 0"
+          @click="diagnoseSelected"
+        >
+          批量 AI 把脉
+          <span v-if="selectedRows.length > 0" style="margin-left: 4px;">({{ selectedRows.length }})</span>
+        </el-button>
         <el-button type="primary" :icon="Plus" @click="openCreate">新增基金</el-button>
       </div>
 
-      <el-table :data="list" v-loading="loading" stripe border :max-height="540">
+      <div
+        v-if="pulse.state.batchRunning && pulse.state.total > 1"
+        style="margin-bottom: 8px; font-size: 13px; color: var(--el-text-color-secondary);"
+      >
+        把脉进度：{{ pulse.state.done }} / {{ pulse.state.total }}
+      </div>
+
+      <el-alert
+        title="AI 建议仅供参考，投资决策请自行判断"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 8px;"
+      />
+
+      <el-table :data="list" v-loading="loading" stripe border :max-height="540" @selection-change="onSelectionChange">
+        <el-table-column type="selection" width="42" />
         <el-table-column prop="asset_code" label="基金代码" width="100" />
         <el-table-column prop="name" label="名称" min-width="180" show-overflow-tooltip />
         <el-table-column label="类型" width="90">
@@ -296,6 +367,16 @@ const platformName = computed(() => (id?: number | null) => platformStore.nameOf
         <el-table-column label="状态" width="80">
           <template #default="{ row }">
             <el-tag size="small" :type="row.status === '活跃' ? 'success' : 'info'">{{ row.status }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="AI 把脉" width="170" fixed="right">
+          <template #default="{ row }">
+            <PulseDiagnosisCell
+              :asset-id="row.id"
+              :result="pulse.getResult(row.id)"
+              :loading="pulse.isLoading(row.id)"
+              @diagnose="diagnoseOne"
+            />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="320" fixed="right">

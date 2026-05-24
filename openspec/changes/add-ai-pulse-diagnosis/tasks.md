@@ -33,34 +33,29 @@
 
 ## 5. 前端 API 层
 
-- [ ] 5.1 新增前端 API 函数（`frontend/src/api/pulse-diagnosis.ts`）：`pulseDiagnosis.create(assetIds)` 和 `pulseDiagnosis.batchGet(assetIds)`
-- [ ] 5.2 新增前端类型定义：`PulseDiagnosisResult`（asset_id/recommendation/**confidence**/**summary**/**detail**/diagnosed_at/trigger_source）；Recommendation = "sell" | "reduce" | "hold" | "add"；Confidence = "high" | "medium" | "low"
+- [x] 5.1 新增前端 API 函数（`frontend/src/api/pulse-diagnosis.ts`）：`pulseDiagnosis.create(assetIds)` 和 `pulseDiagnosis.batchGet(assetIds)`
+- [x] 5.2 新增前端类型定义：`PulseDiagnosisResult`（asset_id/recommendation/**confidence**/**summary**/**detail**/diagnosed_at/trigger_source）；Recommendation = "sell" | "reduce" | "hold" | "add"；Confidence = "high" | "medium" | "low"
 
-## 6. 前端页面改动——基金管理页（FundManage.vue）
+## 6. 基金管理页改动（`frontend/src/views/asset/FundManage.vue`）
 
-- [ ] 6.1 在列表操作栏新增"AI 把脉"按钮（使用 `MagicStick` 图标）
-- [ ] 6.2 在表格中新增"把脉结论"列、"置信度"小标记、"简要原因"列
-- [ ] 6.3 "把脉结论"列用彩色 `el-tag` 显示（sell→danger、reduce→warning、hold→success、add→primary）
-- [ ] 6.4 置信度 `low` 时在结论旁加灰色感叹号图标 + tooltip"请谨慎参考"
-- [ ] 6.5 点击行可展开查看 `detail` 详细原因（`el-table` 的 expand 行或 popover）
-- [ ] 6.6 工具栏新增"批量 AI 把脉"按钮（选中行后启用）
-- [ ] 6.7 页面加载时调用 GET 接口预加载已有把脉结果（批量 `asset_ids` 查询）
-- [ ] 6.8 把脉请求发出后显示 loading；并行批量把脉时显示进度提示（“X/Y 完成”）
-- [ ] 6.9 在表格顶部加静态风险提示文案："AI 建议仅供参考，投资决策请自行判断"
-- [ ] 6.10 根据 `diagnosed_at` 计算距今天数，结果超过 7 天时显示"上次把脉于 X 天前"提醒
+- [x] 6.1 在列表操作栏新增"AI 把脉"按钮（使用 `MagicStick` 图标）
+- [x] 6.2 在表格中新增"把脉结论"列、"置信度"小标记、"简要原因"列
+- [x] 6.3 "把脉结论"列用彩色 `el-tag` 显示（sell→danger、reduce→warning、hold→success、add→primary）
+- [x] 6.4 置信度 `low` 时在结论旁加灰色感叹号图标 + tooltip"请谨慎参考"
+- [x] 6.5 点击行可展开查看 `detail` 详细原因（`el-table` 的 expand 行或 popover）
+- [x] 6.6 工具栏新增"批量 AI 把脉"按钮（选中行后启用）
+- [x] 6.7 页面加载时调用 GET 接口预加载已有把脉结果（批量 `asset_ids` 查询）
+- [x] 6.8 把脉请求发出后显示 loading；并行批量把脉时显示进度提示（“X/Y 完成”）
+- [x] 6.9 在表格顶部加静态风险提示文案："AI 建议仅供参考，投资决策请自行判断"
+- [x] 6.10 根据 `diagnosed_at` 计算距今天数，结果超过 7 天时显示"上次把脉于 X 天前"提醒
 
-## 7. 前端页面改动——股票管理页（StockManage.vue）
+## 7. 股票管理页改动（`frontend/src/views/asset/StockManage.vue`）
 
-- [ ] 7.1 同 6.1-6.10 的改动，适配股票页面
+- [x] 7.1 同 6.1-6.10 的改动，适配股票页面
 
-## 8. 前端页面改动——理财产品管理页（WealthManage.vue）
+## 8. 理财产品管理页改动（`frontend/src/views/asset/WealthManage.vue`）
 
-- [ ] 8.1 同 6.1-6.10 的改动，适配理财产品页面
-
-## 9. 集成测试
-
-- [ ] 9.1 端到端测试：前端点击"AI 把脉"→ 后端执行分析 → 结果返回并展示（验证置信度、分层原因、列颜色）
-- [ ] 9.2 测试数据不足时的提示信息（hold + low + "数据不足..."）
+- [x] 8.1 同 6.1-6.10 的改动，适配理财产品页面- [ ] 9.2 测试数据不足时的提示信息（hold + low + "数据不足..."）
 - [ ] 9.3 测试批量并行把脉场景（验证并发度 3、单资产失败不阻塞其他、返回项含 status 字段）
 - [ ] 9.4 测试页面刷新后把脉结果仍然显示（缓存命中，且能看到 trigger_source 和 diagnosed_at）
 - [ ] 9.5 测试 AI 对话中调用 `pulse_diagnosis` 工具的场景（triggerSource=chat，验证与手动触发记录互不冲突）
