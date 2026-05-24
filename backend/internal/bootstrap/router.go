@@ -41,13 +41,13 @@ func RegisterRoutes(app *App) *gin.Engine {
 		return r
 	}
 
-	h.Meta.Register(v1)         // /healthz /version /platforms
-	h.Asset.Register(v1)        // /assets
-	h.Holding.Register(v1)      // /holdings
-	h.Transaction.Register(v1)  // /transactions
-	h.Quote.Register(v1)        // /quotes
-	h.Rate.Register(v1)         // /rates
-	h.Export.Register(v1)       // /export
+	h.Meta.Register(v1)        // /healthz /version /platforms
+	h.Asset.Register(v1)       // /assets
+	h.Holding.Register(v1)     // /holdings
+	h.Transaction.Register(v1) // /transactions
+	h.Quote.Register(v1)       // /quotes
+	h.Rate.Register(v1)        // /rates
+	h.Export.Register(v1)      // /export
 
 	if h.AIMeta != nil {
 		h.AIMeta.Register(v1) // /ai/providers
@@ -57,6 +57,9 @@ func RegisterRoutes(app *App) *gin.Engine {
 	}
 	if h.AIMessage != nil {
 		h.AIMessage.Register(v1) // POST /ai/sessions/:id/messages
+	}
+	if h.AIPulseDiagnosis != nil {
+		h.AIPulseDiagnosis.Register(v1) // POST /ai/pulse-diagnosis & GET /ai/pulse-diagnosis
 	}
 
 	// dev 模式开放手工触发 cron

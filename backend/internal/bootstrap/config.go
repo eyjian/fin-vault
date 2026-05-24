@@ -27,17 +27,17 @@ import (
 //
 // 加载流程：viper 仅在 LoadConfig 调用一次；其余模块通过本结构体取值，禁止再读 viper。
 type Config struct {
-	Server   ServerConfig       `mapstructure:"server"`
-	Database DatabaseConfig     `mapstructure:"database"`
-	Cache    CacheConfig        `mapstructure:"cache"`
-	Log      LogConfig          `mapstructure:"log"`
-	Auth     AuthConfig         `mapstructure:"auth"`
-	Security SecurityConfig     `mapstructure:"security"`
+	Server   ServerConfig         `mapstructure:"server"`
+	Database DatabaseConfig       `mapstructure:"database"`
+	Cache    CacheConfig          `mapstructure:"cache"`
+	Log      LogConfig            `mapstructure:"log"`
+	Auth     AuthConfig           `mapstructure:"auth"`
+	Security SecurityConfig       `mapstructure:"security"`
 	LLM      model.RegistryConfig `mapstructure:"llm"`
-	AI       AIConfig           `mapstructure:"ai"`
-	Quote    QuoteConfig        `mapstructure:"quote"`
-	Cron     CronConfig         `mapstructure:"cron"`
-	JWT      JWTConfig          `mapstructure:"jwt"`
+	AI       AIConfig             `mapstructure:"ai"`
+	Quote    QuoteConfig          `mapstructure:"quote"`
+	Cron     CronConfig           `mapstructure:"cron"`
+	JWT      JWTConfig            `mapstructure:"jwt"`
 }
 
 // ServerConfig HTTP 服务配置。
@@ -110,7 +110,8 @@ type SecurityConfig struct {
 // LLMConfig（多 Provider 路由）由 internal/llm/model 包内的 RegistryConfig 提供，
 // 这里只承载 trpc-agent-go 引入后新增的会话/运行时层配置项。
 type AIConfig struct {
-	Session SessionConfig `mapstructure:"session"`
+	Session        SessionConfig        `mapstructure:"session"`
+	PulseDiagnosis PulseDiagnosisConfig `mapstructure:"pulse_diagnosis"`
 }
 
 // SessionConfig AI 会话相关配置。
@@ -120,6 +121,14 @@ type AIConfig struct {
 type SessionConfig struct {
 	MaxStepsSizeMB int `mapstructure:"max_steps_size_mb"`
 	HistoryWindow  int `mapstructure:"history_window"`
+}
+
+// PulseDiagnosisConfig AI 把脉相关配置（spec ai-pulse-diagnosis "批量并行化"）。
+//
+//   - Concurrency ：REST API 批量把脉的并发度（errgroup 信号量），默认 3。
+//     过大会触达 LLM 提供方 RPM 限制；过小会导致总耗时偏长。
+type PulseDiagnosisConfig struct {
+	Concurrency int `mapstructure:"concurrency"`
 }
 
 // QuoteConfig 行情拉取配置。
@@ -203,6 +212,15 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.AI.Session.HistoryWindow <= 0 {
 		return nil, fmt.Errorf("ai.session.history_window must be > 0, got %d", cfg.AI.Session.HistoryWindow)
+	}
+
+	// AI 把脉并发度（spec ai-pulse-diagnosis "批量并行化"）：未配置或非法值时默认 3。
+	if cfg.AI.PulseDiagnosis.Concurrency <= 0 {
+		cfg.AI.PulseDiagnosis.Concurrency = 3
+	}
+	if cfg.AI.PulseDiagnosis.Concurrency > 20 {
+		// 上限保护：避免一次发起过多并发请求触达 LLM 提供方 RPM 限制
+		cfg.AI.PulseDiagnosis.Concurrency = 20
 	}
 
 	return cfg, nil

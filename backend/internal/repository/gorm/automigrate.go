@@ -30,6 +30,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&domain.Session{},
 		&domain.Message{},
 		&domain.AgentStep{},
+		// AI 把脉结果（一个 (user, asset) 唯一一条最新记录）
+		&domain.PulseDiagnosis{},
 		// 报表
 		&domain.Report{},
 	)

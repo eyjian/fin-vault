@@ -42,6 +42,9 @@ type Handlers struct {
 	// 当前 §8 阶段两者均为 nil，路由注册侧用 nil-check 兼容（router.go）。
 	AISession *handler.AISessionHandler
 	AIMessage *handler.AIMessageHandler
+
+	// AIPulseDiagnosis：D16 LLM 不可用时为 nil，router 条件挂载兜底（不注册路由 → 404）。
+	AIPulseDiagnosis *handler.PulseDiagnosisHandler
 }
 
 // Wire 总装：DB → Repo → Service → Handler。
@@ -62,16 +65,17 @@ func Wire(cfg *Config) (*App, error) {
 
 	// 3. Repository 层
 	repos := &repository.Repositories{
-		UoW:         gormrepo.NewUnitOfWork(db),
-		User:        gormrepo.NewUserRepository(db),
-		Platform:    gormrepo.NewPlatformRepository(db),
-		Asset:       gormrepo.NewAssetRepository(db),
-		Holding:     gormrepo.NewHoldingRepository(db),
-		Transaction: gormrepo.NewTransactionRepository(db),
-		CostLot:     gormrepo.NewCostLotRepository(db),
-		Portfolio:   gormrepo.NewPortfolioRepository(db),
-		Quote:       gormrepo.NewQuoteRepository(db),
-		Rate:        gormrepo.NewRateRepository(db),
+		UoW:            gormrepo.NewUnitOfWork(db),
+		User:           gormrepo.NewUserRepository(db),
+		Platform:       gormrepo.NewPlatformRepository(db),
+		Asset:          gormrepo.NewAssetRepository(db),
+		Holding:        gormrepo.NewHoldingRepository(db),
+		Transaction:    gormrepo.NewTransactionRepository(db),
+		CostLot:        gormrepo.NewCostLotRepository(db),
+		Portfolio:      gormrepo.NewPortfolioRepository(db),
+		Quote:          gormrepo.NewQuoteRepository(db),
+		Rate:           gormrepo.NewRateRepository(db),
+		PulseDiagnosis: gormrepo.NewPulseDiagnosisRepository(db),
 	}
 
 	// 4. LLM 装配（§9 实装）
@@ -129,7 +133,11 @@ func Wire(cfg *Config) (*App, error) {
 	//   - LLM 不可用 → AIMessage 留 nil，router 条件挂载兜底（POST /messages 不注册 → 404）
 	// e2e handler 单测自包装 httptest router，不依赖本装配链。
 	sessionStore := session.NewSQLiteStore(db, cfg.AI.Session.HistoryWindow)
-	handlers.AISession, handlers.AIMessage = wireAI(cfg, repos, sessionStore, slog.Default())
+	var pulseSvc *service.PulseDiagnosisService
+	handlers.AISession, handlers.AIMessage, pulseSvc = wireAI(cfg, repos, sessionStore, slog.Default())
+	if pulseSvc != nil {
+		handlers.AIPulseDiagnosis = handler.NewPulseDiagnosisHandler(pulseSvc, cfg.AI.PulseDiagnosis.Concurrency)
+	}
 
 	// 9. Cron
 	cm := NewCronManager(matureSvc, cfg.Cron.Mature)
@@ -163,4 +171,3 @@ func (a *App) Close() {
 		}
 	}
 }
-

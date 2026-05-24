@@ -21,11 +21,13 @@
 package bootstrap
 
 import (
+	"context"
 	"log/slog"
 	"sort"
 
 	sdktool "trpc.group/trpc-go/trpc-agent-go/tool"
 
+	"github.com/eyjian/fin-vault/backend/internal/domain"
 	"github.com/eyjian/fin-vault/backend/internal/handler"
 	"github.com/eyjian/fin-vault/backend/internal/llm/agent"
 	"github.com/eyjian/fin-vault/backend/internal/llm/model"
@@ -48,15 +50,69 @@ const defaultAIInstruction = `你是 fin-vault 个人理财助手，回答必须
 3. search_fund 可以按关键词搜索用户已记录的基金。
 4. 回答中引用的任何数据（价格、盈亏、持仓等）必须来自工具调用结果，禁止编造数值。`
 
-// buildAITools 构造本期 7 个工具（spec ai-tools 议题首发 6 个 + history_query 历史交易回溯）。
+// =====================================================================
+// PulseDiagnoser 适配器（让 *service.PulseDiagnosisService 满足 tools.PulseDiagnoser）
+// =====================================================================
+
+// pulseDiagnoserAdapter 把 service.PulseDiagnosisService 适配为 tools.PulseDiagnoser，
+// 让 internal/llm/tools 不必反向 import internal/service。
+//
+// 设计要点：service 层的 *PulseDiagnoseResult 与 tools.PulseDiagnoseResult 字段一致，
+// 适配器只做枚举类型 → string 的映射 + 字段拷贝。
+type pulseDiagnoserAdapter struct {
+	svc *service.PulseDiagnosisService
+}
+
+// IsAvailable 透传 service 层的 LLM 可用性。
+func (a *pulseDiagnoserAdapter) IsAvailable() bool {
+	if a == nil || a.svc == nil {
+		return false
+	}
+	return a.svc.IsAvailable()
+}
+
+// Diagnose 把 tools.PulseDiagnoseRequest 映射到 service.PulseDiagnoseInput，
+// 再把 service 返回值映射回 tools.PulseDiagnoseResult。
+func (a *pulseDiagnoserAdapter) Diagnose(ctx context.Context, req tools.PulseDiagnoseRequest) (*tools.PulseDiagnoseResult, error) {
+	trigger := domain.PulseTriggerSource(req.TriggerSource)
+	if !trigger.IsValid() {
+		trigger = domain.PulseTriggerChat // 工具层默认 chat
+	}
+	res, err := a.svc.Diagnose(ctx, service.PulseDiagnoseInput{
+		UserID:        req.UserID,
+		AssetID:       req.AssetID,
+		TriggerSource: trigger,
+		SessionID:     req.SessionID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &tools.PulseDiagnoseResult{
+		AssetID:        res.AssetID,
+		Recommendation: string(res.Recommendation),
+		Confidence:     string(res.Confidence),
+		Summary:        res.Summary,
+		Detail:         res.Detail,
+		DataReferences: res.DataReferences,
+		SessionID:      res.SessionID,
+		TriggerSource:  string(res.TriggerSource),
+		DiagnosedAt:    res.DiagnosedAt,
+	}, nil
+}
+
+// buildAITools 构造本期 8 个工具（spec ai-tools 议题首发 6 个 + history_query 历史交易回溯 + pulse_diagnosis AI 把脉）。
 //
 // 顺序：search_fund / market_quote / market_data / holding_query / profit_calc /
-// platform_summary / history_query —— 与 NewToolsetAgentFactory 启动日志 "llm tools
-// registered" 输出顺序保持一致（factory 内部按传入顺序提取 Declaration().Name）。
+// platform_summary / history_query / pulse_diagnosis —— 与 NewToolsetAgentFactory
+// 启动日志 "llm tools registered" 输出顺序保持一致（factory 内部按传入顺序提取
+// Declaration().Name）。
 //
-// Deps 仅依赖 repository 接口，无 SDK 依赖；启动期一次性构造后被 factory 持有 +
-// 每次 Run 共享同一组工具实例（无状态）。
-func buildAITools(repos *repository.Repositories) []sdktool.CallableTool {
+// pulseSvc 允许为 nil（D16 降级路径），此时仍构造工具但其 IsAvailable() 返 false，
+// LLM 调用时返 ErrAIPulseUnavailable，与 spec "工具调用失败可见" 一致。
+//
+// Deps 仅依赖 repository 接口和 service 层（pulseSvc），无 SDK 依赖；启动期一次性
+// 构造后被 factory 持有 + 每次 Run 共享同一组工具实例（无状态）。
+func buildAITools(repos *repository.Repositories, pulseSvc *service.PulseDiagnosisService) []sdktool.CallableTool {
 	return []sdktool.CallableTool{
 		tools.NewSearchFundTool(tools.SearchFundDeps{Asset: repos.Asset}),
 		tools.NewMarketQuoteTool(tools.MarketQuoteDeps{Quote: repos.Quote, Asset: repos.Asset}),
@@ -69,25 +125,29 @@ func buildAITools(repos *repository.Repositories) []sdktool.CallableTool {
 			Quote:    repos.Quote,
 		}),
 		tools.NewHistoryQueryTool(tools.HistoryQueryDeps{Transaction: repos.Transaction}),
+		tools.NewPulseDiagnosisTool(tools.PulseDiagnosisDeps{
+			Pulse: &pulseDiagnoserAdapter{svc: pulseSvc},
+		}),
 	}
 }
 
-// wireAI 装配 AISession + AIMessage 两 handler。
+// wireAI 装配 AISession + AIMessage + PulseDiagnosis 三个 handler所需的 service。
 //
 // 返回值说明：
 //   - sessionH：始终非 nil（CRUD 不依赖 Runner）。
 //   - messageH：D16 降级路径下为 nil（NewDefaultModel error），router 条件挂载会
 //     跳过 POST /ai/sessions/:id/messages 注册（404）。
+//   - pulseSvc：D16 降级路径下为 nil（LLM 不可用）；bootstrap.Wire 负责根据
+//     是否为 nil 决定是否构造 PulseDiagnosisHandler（动态路由）。
 //
 // 错误语义：本函数刻意不返 error —— LLM 不可用归入 messageH=nil 的降级路径，
-// 让进程仍可正常启动（spec "无配置 fallback 空数组"扩展到运行时降级）。如未来
-// SessionStore 创建等真硬错误也走这里再考虑改签名。
+// 让进程仍可正常启动（spec "无配置 fallback 空数组"扩展到运行时降级）。
 func wireAI(
 	cfg *Config,
 	repos *repository.Repositories,
 	sessionStore session.SessionStore,
 	logger *slog.Logger,
-) (*handler.AISessionHandler, *handler.AIMessageHandler) {
+) (*handler.AISessionHandler, *handler.AIMessageHandler, *service.PulseDiagnosisService) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -125,11 +185,19 @@ func wireAI(
 			"message_enabled", false,
 			"reason", err.Error(),
 		)
-		return sessionH, nil
+		return sessionH, nil, nil
 	}
 
-	// 4) 正常路径：装 7 工具 → factory（内部打日志 #3）→ Runner → AIMessage。
-	aiTools := buildAITools(repos)
+	// 4) 正常路径：先构造 ChatClient + PulseDiagnosisService（供 pulse_diagnosis 工具依赖），
+	// 再装 8 工具 → factory（内部打日志 #3）→ Runner → AIMessage。
+	chatClient := agent.NewSDKChatClient(sdkModel)
+	holdingSvc := service.NewHoldingService(repos.Holding, repos.Asset, repos.Quote, repos.Rate, repos.Platform)
+	pulseSvc := service.NewPulseDiagnosisService(
+		chatClient, holdingSvc,
+		repos.Asset, repos.PulseDiagnosis, repos.Quote,
+	)
+
+	aiTools := buildAITools(repos, pulseSvc)
 	factory := agent.NewToolsetAgentFactory(
 		agent.DefaultAppName,
 		sdkModel,
@@ -150,7 +218,8 @@ func wireAI(
 	logger.Info("ai endpoints status",
 		"session_enabled", true,
 		"message_enabled", true,
+		"pulse_enabled", true,
 	)
 
-	return sessionH, messageH
+	return sessionH, messageH, pulseSvc
 }

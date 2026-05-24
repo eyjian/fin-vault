@@ -84,15 +84,15 @@ var (
 
 var (
 	// Asset
-	ErrAssetNotFound      = New(30001, "asset not found")
-	ErrAssetDuplicated    = New(30002, "asset already exists")
-	ErrAssetTypeInvalid   = New(30003, "invalid asset type")
-	ErrAssetCodeInvalid   = New(30004, "invalid asset code format")
+	ErrAssetNotFound    = New(30001, "asset not found")
+	ErrAssetDuplicated  = New(30002, "asset already exists")
+	ErrAssetTypeInvalid = New(30003, "invalid asset type")
+	ErrAssetCodeInvalid = New(30004, "invalid asset code format")
 
 	// Holding
-	ErrHoldingNotFound    = New(30101, "holding not found")
-	ErrHoldingDuplicated  = New(30102, "holding already exists")
-	ErrHoldingClosed      = New(30103, "holding already closed/matured")
+	ErrHoldingNotFound   = New(30101, "holding not found")
+	ErrHoldingDuplicated = New(30102, "holding already exists")
+	ErrHoldingClosed     = New(30103, "holding already closed/matured")
 
 	// Transaction
 	ErrTxnNotFound          = New(30201, "transaction not found")
@@ -116,10 +116,10 @@ var (
 // =====================================================================
 
 var (
-	ErrPriceQuoteNotFound    = New(40001, "price quote not found")
-	ErrExchangeRateNotFound  = New(40002, "exchange rate not found")
-	ErrQuoteSourceUnsupport  = New(40003, "unsupported quote source")
-	ErrQuoteFetchFailed      = New(40004, "fetch quote failed")
+	ErrPriceQuoteNotFound   = New(40001, "price quote not found")
+	ErrExchangeRateNotFound = New(40002, "exchange rate not found")
+	ErrQuoteSourceUnsupport = New(40003, "unsupported quote source")
+	ErrQuoteFetchFailed     = New(40004, "fetch quote failed")
 )
 
 // =====================================================================
@@ -127,11 +127,16 @@ var (
 // =====================================================================
 
 var (
-	ErrAISessionNotFound      = New(50001, "session not found")
-	ErrAIRequestFailed        = New(50004, "llm request failed")
-	ErrAIToolCallFailed       = New(50005, "llm tool call failed")
-	ErrAIProviderRateLimited  = New(50006, "llm provider rate limited")
-	ErrAIToolNotFound         = New(50007, "tool not found")
+	ErrAISessionNotFound     = New(50001, "session not found")
+	ErrAIRequestFailed       = New(50004, "llm request failed")
+	ErrAIToolCallFailed      = New(50005, "llm tool call failed")
+	ErrAIProviderRateLimited = New(50006, "llm provider rate limited")
+	ErrAIToolNotFound        = New(50007, "tool not found")
+
+	// AI 把脉
+	ErrAIPulseUnavailable      = New(50010, "ai pulse diagnosis unavailable")
+	ErrAIPulseDataInsufficient = New(50011, "ai pulse data insufficient")
+	ErrAIPulseParseFailed      = New(50012, "ai pulse llm output parse failed")
 )
 
 // =====================================================================
@@ -139,8 +144,8 @@ var (
 // =====================================================================
 
 var (
-	ErrDB           = New(90001, "database error")
-	ErrCache        = New(90002, "cache error")
-	ErrConfig       = New(90003, "config error")
-	ErrTransaction  = New(90004, "db transaction error")
+	ErrDB          = New(90001, "database error")
+	ErrCache       = New(90002, "cache error")
+	ErrConfig      = New(90003, "config error")
+	ErrTransaction = New(90004, "db transaction error")
 )

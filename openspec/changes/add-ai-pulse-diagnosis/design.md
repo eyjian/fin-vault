@@ -153,12 +153,34 @@ LLM 输出 JSON schema：
 
 ### D9: 把脉逻辑可复用设计
 
-**决策**：把脉核心逻辑封装在 `PulseDiagnosisService.Diagnose(ctx, userID, assetID)` 方法中，可被以下场景调用：
+**决策**：把脉核心逻辑封装在 `PulseDiagnosisService.Diagnose(ctx, userID, assetID, triggerSource)` 方法中，可被以下场景调用：
 - Agent 工具 `pulse_diagnosis`（AI 对话中调用）
 - REST API handler（前端直调）
 - 未来定时任务（ScheduledPulse）
 
 **理由**：三种入口共享同一套把脉逻辑，避免重复实现。
+
+### D11: 把脉 LLM 调用封装（避免 service 层 import SDK）
+
+**决策**：在 `internal/llm/agent` 包新增业务侧接口 `ChatClient`：
+
+```go
+type ChatClient interface {
+    Chat(ctx context.Context, systemPrompt, userPrompt string) (string, error)
+}
+```
+
+由 `agent` 包提供 `NewSDKChatClient(model sdkmodel.Model) ChatClient` 实现（封装 `model.GenerateContent` 流式聚合与 token 用量解析）。
+
+`PulseDiagnosisService` 只 import `agent.ChatClient`，不直接接触 SDK；bootstrap 在 `wireAI` 内构造 SDK Model 后顺便构造 `ChatClient` 注入 service。
+
+**理由**：
+- 把脉是单轮对话（非工具调用循环），不需要复用 `agent.Runner`（Runner 是基于 session 的多轮 + tool calling 流程）
+- 直接调用 SDK `Model.GenerateContent` 比走 Runner 链路更轻量，省去工具集成与多轮迭代的开销
+- 通过新接口隔离 SDK，service 层不破坏铁律 F2（0 SDK 命中）
+- `ChatClient` 也可被未来其他单轮 LLM 任务复用（如基金摘要生成、风险提示重写）
+
+**降级**：D16 LLM 不可用时，`PulseDiagnosisService` 也应降级为不可用（与 `AIMessageService` 同策略），handler 路由有 nil-check 兜底。
 
 ### D10: 前端 API 接口设计
 

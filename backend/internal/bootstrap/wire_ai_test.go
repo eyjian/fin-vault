@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	sqlitedrv "github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	sqlitedrv "github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/eyjian/fin-vault/backend/internal/domain"
@@ -48,6 +48,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 		&domain.Transaction{},
 		&domain.PriceQuote{},
 		&domain.ExchangeRate{},
+		&domain.PulseDiagnosis{},
 	), "automigrate")
 	return db
 }
@@ -55,16 +56,17 @@ func newTestDB(t *testing.T) *gorm.DB {
 // newTestRepos 构造 repos（与真 wire.go 装配链一致），用于 wireAI 内部 buildAITools。
 func newTestRepos(db *gorm.DB) *repository.Repositories {
 	return &repository.Repositories{
-		UoW:         gormrepo.NewUnitOfWork(db),
-		User:        gormrepo.NewUserRepository(db),
-		Platform:    gormrepo.NewPlatformRepository(db),
-		Asset:       gormrepo.NewAssetRepository(db),
-		Holding:     gormrepo.NewHoldingRepository(db),
-		Transaction: gormrepo.NewTransactionRepository(db),
-		CostLot:     gormrepo.NewCostLotRepository(db),
-		Portfolio:   gormrepo.NewPortfolioRepository(db),
-		Quote:       gormrepo.NewQuoteRepository(db),
-		Rate:        gormrepo.NewRateRepository(db),
+		UoW:            gormrepo.NewUnitOfWork(db),
+		User:           gormrepo.NewUserRepository(db),
+		Platform:       gormrepo.NewPlatformRepository(db),
+		Asset:          gormrepo.NewAssetRepository(db),
+		Holding:        gormrepo.NewHoldingRepository(db),
+		Transaction:    gormrepo.NewTransactionRepository(db),
+		CostLot:        gormrepo.NewCostLotRepository(db),
+		Portfolio:      gormrepo.NewPortfolioRepository(db),
+		Quote:          gormrepo.NewQuoteRepository(db),
+		Rate:           gormrepo.NewRateRepository(db),
+		PulseDiagnosis: gormrepo.NewPulseDiagnosisRepository(db),
 	}
 }
 
@@ -131,16 +133,16 @@ func makeCfg(llm model.RegistryConfig) *Config {
 // §9.1 buildAITools 测试
 // =====================================================================
 
-// TestBuildAITools_Returns7Tools
+// TestBuildAITools_Returns8Tools
 //
-// 验证 7 个工具齐全 + name 集合精确等于规范期望。
-// spec ai-tools 议题"首发 6 个 + history_query"。
-func TestBuildAITools_Returns7Tools(t *testing.T) {
+// 验证 8 个工具齐全 + name 集合精确等于规范期望。
+// spec ai-tools 议题"首发 6 个 + history_query + pulse_diagnosis"。
+func TestBuildAITools_Returns8Tools(t *testing.T) {
 	db := newTestDB(t)
 	repos := newTestRepos(db)
 
-	got := buildAITools(repos)
-	require.Len(t, got, 7, "首发 6 工具 + history_query 共 7 个")
+	got := buildAITools(repos, nil)
+	require.Len(t, got, 8, "首发 6 工具 + history_query + pulse_diagnosis 共 8 个")
 
 	wantNames := map[string]bool{
 		"search_fund":      false,
@@ -150,6 +152,7 @@ func TestBuildAITools_Returns7Tools(t *testing.T) {
 		"profit_calc":      false,
 		"platform_summary": false,
 		"history_query":    false,
+		"pulse_diagnosis":  false,
 	}
 	for _, tl := range got {
 		require.NotNil(t, tl, "tool 实例不应为 nil")
@@ -183,7 +186,7 @@ func TestWireAI_NormalPath_FullAssembly(t *testing.T) {
 	var buf bytes.Buffer
 	logger := captureLogger(&buf)
 
-	sessionH, messageH := wireAI(cfg, repos, store, logger)
+	sessionH, messageH, _ := wireAI(cfg, repos, store, logger)
 
 	require.NotNil(t, sessionH, "AISessionHandler 始终非 nil")
 	require.NotNil(t, messageH, "正常路径 AIMessageHandler 必须非 nil")
@@ -215,7 +218,7 @@ func TestWireAI_DegradePath_NoUsableProvider(t *testing.T) {
 	var buf bytes.Buffer
 	logger := captureLogger(&buf)
 
-	sessionH, messageH := wireAI(cfg, repos, store, logger)
+	sessionH, messageH, _ := wireAI(cfg, repos, store, logger)
 
 	require.NotNil(t, sessionH, "D16 降级：AISessionHandler 仍始终装")
 	assert.Nil(t, messageH, "D16 降级：AIMessageHandler 必须为 nil")
@@ -244,7 +247,7 @@ func TestWireAI_DegradePath_EmptyProviders(t *testing.T) {
 	var buf bytes.Buffer
 	logger := captureLogger(&buf)
 
-	sessionH, messageH := wireAI(cfg, repos, store, logger)
+	sessionH, messageH, _ := wireAI(cfg, repos, store, logger)
 
 	require.NotNil(t, sessionH)
 	assert.Nil(t, messageH, "Providers 空时 AIMessageHandler 必须为 nil")
@@ -275,7 +278,7 @@ func TestWireAI_NilLogger_FallbackToDefault(t *testing.T) {
 
 	// 不应 panic
 	require.NotPanics(t, func() {
-		_, _ = wireAI(cfg, repos, store, nil)
+		_, _, _ = wireAI(cfg, repos, store, nil)
 	})
 }
 
@@ -287,7 +290,7 @@ func TestBuildAITools_NameOrder(t *testing.T) {
 	db := newTestDB(t)
 	repos := newTestRepos(db)
 
-	got := buildAITools(repos)
+	got := buildAITools(repos, nil)
 	wantOrder := []string{
 		"search_fund",
 		"market_quote",
@@ -296,6 +299,7 @@ func TestBuildAITools_NameOrder(t *testing.T) {
 		"profit_calc",
 		"platform_summary",
 		"history_query",
+		"pulse_diagnosis",
 	}
 	for i, tl := range got {
 		assert.Equal(t, wantOrder[i], tl.Declaration().Name,
