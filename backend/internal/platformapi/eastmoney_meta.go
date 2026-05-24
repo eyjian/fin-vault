@@ -251,24 +251,43 @@ func (f *eastmoneyMetaFetcher) fetchStockMeta(ctx context.Context, a AssetKey) (
 
 // inferStockMarket 按 A 股代码前缀推断市场。
 //
-// 规则（与前端保持一致）：
+// 规则（与前端 inferMarket 保持一致）：
 //   - 6 开头 → SH
-//   - 0 / 3 开头 → SZ
+//   - 0 / 3 开头且为 6 位 A 股代码 → SZ
 //   - 8 / 4 开头 → BJ
-//   - 其它返回 ""，由调用方决定如何处理（例如 HK/US 必须用户显式提供）。
+//   - 5 位纯数字且不符合上述 A 股/北交所规则 → HK（港股）
+//   - 其它返回 ""，由调用方决定如何处理（例如 US 必须用户显式提供）。
 func inferStockMarket(code string) string {
 	if len(code) == 0 {
 		return ""
 	}
-	switch code[0] {
+	c := code[0]
+	switch c {
 	case '6':
 		return "SH"
 	case '0', '3':
-		return "SZ"
+		// 6 位 A 股代码（如 000001、300001）→ SZ；港股也是 0 开头但为 5 位
+		if len(code) == 6 {
+			return "SZ"
+		}
 	case '8', '4':
 		return "BJ"
 	}
+	// 5 位纯数字且不符合 A 股/北交所规则 → 港股（与前端 inferMarket 一致）
+	if len(code) == 5 && isAllDigits(code) {
+		return "HK"
+	}
 	return ""
+}
+
+// isAllDigits 判断字符串是否全为数字。
+func isAllDigits(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // isAShareMarket 当前 A 股市场（SH/SZ/BJ）才启用 industry/sector 字段。
