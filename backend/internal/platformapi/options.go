@@ -17,8 +17,9 @@ type fetcherConfig struct {
 	timeout time.Duration
 
 	// eastmoney
-	fundBaseURL  string // 默认 https://fundgz.1234567.com.cn
-	stockBaseURL string // 默认 https://push2.eastmoney.com
+	fundBaseURL       string // 默认 https://fundgz.1234567.com.cn
+	fundDetailBaseURL string // 默认 https://fund.eastmoney.com（基金元信息：pingzhongdata）
+	stockBaseURL      string // 默认 https://push2.eastmoney.com
 
 	// sina
 	sinaBaseURL string // 默认 https://hq.sinajs.cn
@@ -33,11 +34,12 @@ func defaultConfig(timeout time.Duration) *fetcherConfig {
 		timeout = 5 * time.Second
 	}
 	return &fetcherConfig{
-		timeout:        timeout,
-		fundBaseURL:    "https://fundgz.1234567.com.cn",
-		stockBaseURL:   "https://push2.eastmoney.com",
-		sinaBaseURL:    "https://hq.sinajs.cn",
-		tencentBaseURL: "https://qt.gtimg.cn",
+		timeout:           timeout,
+		fundBaseURL:       "https://fundgz.1234567.com.cn",
+		fundDetailBaseURL: "https://fund.eastmoney.com",
+		stockBaseURL:      "https://push2.eastmoney.com",
+		sinaBaseURL:       "https://hq.sinajs.cn",
+		tencentBaseURL:    "https://qt.gtimg.cn",
 	}
 }
 
@@ -48,6 +50,18 @@ func WithFundBaseURL(url string) FetcherOption {
 	return func(c *fetcherConfig) {
 		if url != "" {
 			c.fundBaseURL = trimRightSlash(url)
+		}
+	}
+}
+
+// WithFundDetailBaseURL 覆盖东方财富基金详情端点 baseURL（仅测试用）。
+//
+// 默认指向 https://fund.eastmoney.com，资产元信息探测会请求
+// {URL}/pingzhongdata/{code}.js 解析基金公司 / 经理 / 类型等字段。
+func WithFundDetailBaseURL(url string) FetcherOption {
+	return func(c *fetcherConfig) {
+		if url != "" {
+			c.fundDetailBaseURL = trimRightSlash(url)
 		}
 	}
 }

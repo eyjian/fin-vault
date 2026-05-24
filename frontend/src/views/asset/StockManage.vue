@@ -5,14 +5,15 @@
 //   - 流水：覆盖 5 种类型 buy/sell/dividend/split/bonus
 
 import { assetApi } from '@/api/asset'
+import { assetProbeApi } from '@/api/asset_probe'
 import { quoteApi } from '@/api/quote'
-import type { Asset, StockDetail } from '@/api/types'
+import type { Asset, AssetProbeResult, StockDetail } from '@/api/types'
 import MoneyInput from '@/components/MoneyInput.vue'
 import PulseDiagnosisCell from '@/components/PulseDiagnosisCell.vue'
 import TxnDialog from '@/components/TxnDialog.vue'
 import { usePulseDiagnosis } from '@/composables/usePulseDiagnosis'
 import { usePlatformStore } from '@/stores/platform'
-import { Delete, Edit, MagicStick, Money, Plus, Refresh } from '@element-plus/icons-vue'
+import { Delete, Download, Edit, MagicStick, Money, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -94,6 +95,86 @@ function openEdit(a: Asset) {
   if (!form.value.stock_detail) form.value.stock_detail = { market: 'SH' } as StockDetail
   isEdit.value = true
   formVisible.value = true
+}
+
+// === “按代码获取信息”（asset-form-autofill）===
+//
+// 仅填空策略：已填字段一律保留，仅对“空 / null / undefined”进行赋值。
+// 按钮 disabled 条件：!form.asset_code || !form.stock_detail.market。
+// market 用户已选则保留；保留服务端推断的其它字段（行业/板块/上市日/最新价）。
+const probing = ref(false)
+
+// 按代码前缀建议 market（仅在 market 为空或与建议一致时才设置；用户已选则不动）。
+// 规则（A 股粗略推断）：
+//   600/601/603/605/688/689 → SH
+//   000/001/002/003/300/301 → SZ
+//   430/8/9 开头 → BJ
+//   港股 5 位数字 → HK
+//   其它（含字母）→ US
+function inferMarket(code: string): StockDetail['market'] | null {
+  if (!code) return null
+  const c = code.trim().toUpperCase()
+  if (/^(600|601|603|605|688|689)\d{3}$/.test(c)) return 'SH'
+  if (/^(000|001|002|003|300|301)\d{3}$/.test(c)) return 'SZ'
+  if (/^(430|8|9)\d{4,5}$/.test(c)) return 'BJ'
+  if (/^\d{5}$/.test(c)) return 'HK'
+  if (/^[A-Z][A-Z.]*$/.test(c)) return 'US'
+  return null
+}
+
+watch(
+  () => form.value.asset_code,
+  (code) => {
+    if (!formVisible.value) return
+    const sd = form.value.stock_detail
+    if (!sd) return
+    const suggested = inferMarket(code || '')
+    if (!suggested) return
+    // 仅在 market 为空时填建议；用户已选则不动。
+    if (!sd.market) sd.market = suggested
+  }
+)
+
+async function onProbeStock() {
+  if (!form.value.asset_code) return
+  if (!form.value.stock_detail?.market) {
+    ElMessage.warning('请先选择市场')
+    return
+  }
+  probing.value = true
+  try {
+    const r: AssetProbeResult = await assetProbeApi.probe({
+      asset_type: 'stock',
+      asset_code: form.value.asset_code,
+      market: form.value.stock_detail.market
+    })
+    const sd = (form.value.stock_detail ||= { market: 'SH' } as StockDetail)
+    let filled = 0
+    const fillStr = (
+      cur: string | undefined | null,
+      next?: string
+    ): string | undefined => {
+      if (next && (cur === '' || cur === null || cur === undefined)) {
+        filled++
+        return next
+      }
+      return cur ?? undefined
+    }
+    form.value.name = fillStr(form.value.name, r.name) || form.value.name
+    sd.industry = fillStr(sd.industry, r.industry)
+    sd.sector = fillStr(sd.sector, r.sector)
+    sd.listing_date = fillStr(sd.listing_date, r.listing_date)
+    sd.latest_price = fillStr(sd.latest_price as string | undefined, r.latest_price)
+    if (filled > 0) {
+      ElMessage.success(`已自动填充 ${filled} 个字段`)
+    } else {
+      ElMessage.info('已是最新信息（未覆盖已填字段）')
+    }
+  } catch {
+    /* http.ts 拦截器已弹错误提示；表单保持原状，不阻塞手动录入 */
+  } finally {
+    probing.value = false
+  }
 }
 
 function sanitizePayload(a: Asset): Asset {
@@ -387,7 +468,16 @@ const platformName = computed(() => (id?: number | null) => platformStore.nameOf
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="股票代码" required>
-              <el-input v-model="form.asset_code" placeholder="例如 600519" />
+              <el-input v-model="form.asset_code" placeholder="例如 600519">
+                <template #append>
+                  <el-button
+                    :icon="Download"
+                    :disabled="!form.asset_code || !form.stock_detail?.market"
+                    :loading="probing"
+                    @click="onProbeStock"
+                  >获取信息</el-button>
+                </template>
+              </el-input>
             </el-form-item>
           </el-col>
           <el-col :span="12">

@@ -155,6 +155,7 @@ func httpStatus(code int) int {
 		return http.StatusForbidden
 	case code == errs.ErrNotFound.Code,
 		code == errs.ErrAssetNotFound.Code,
+		code == errs.ErrAssetProbeNotFound.Code,
 		code == errs.ErrHoldingNotFound.Code,
 		code == errs.ErrTxnNotFound.Code,
 		code == errs.ErrPlatformNotFound.Code,
@@ -170,6 +171,8 @@ func httpStatus(code int) int {
 		return http.StatusConflict
 	case code == errs.ErrTooManyRequest.Code:
 		return http.StatusTooManyRequests
+	case code == errs.ErrAssetProbeUpstream.Code:
+		return http.StatusBadGateway
 	}
 	// core/quote/ai 业务校验错误 → 400；系统级错误 → 500
 	if code >= 30000 && code < 90000 {

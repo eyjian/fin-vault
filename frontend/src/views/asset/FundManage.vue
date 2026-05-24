@@ -6,14 +6,15 @@
 //   - 操作：编辑 / 刷新净值（quotes/refresh）/ 录入流水（buy/sell/dividend/dividend_reinvest）
 
 import { assetApi } from '@/api/asset'
+import { assetProbeApi } from '@/api/asset_probe'
 import { quoteApi } from '@/api/quote'
-import type { Asset, FundDetail } from '@/api/types'
+import type { Asset, AssetProbeResult, FundDetail } from '@/api/types'
 import MoneyInput from '@/components/MoneyInput.vue'
 import PulseDiagnosisCell from '@/components/PulseDiagnosisCell.vue'
 import TxnDialog from '@/components/TxnDialog.vue'
 import { usePulseDiagnosis } from '@/composables/usePulseDiagnosis'
 import { usePlatformStore } from '@/stores/platform'
-import { Delete, Edit, MagicStick, Money, Plus, Refresh } from '@element-plus/icons-vue'
+import { Delete, Download, Edit, MagicStick, Money, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -157,6 +158,49 @@ function openEdit(a: Asset) {
   if (!form.value.fund_detail) form.value.fund_detail = {} as FundDetail
   isEdit.value = true
   formVisible.value = true
+}
+
+// === “按代码获取信息”（asset-form-autofill）===
+//
+// 仅填空策略：已填字段一律保留，仅对“空 / null / undefined”进行赋值。
+// 按钮在 asset_code 为空时 disabled；点击后 loading 态。
+const probing = ref(false)
+async function onProbeFund() {
+  if (!form.value.asset_code) return
+  probing.value = true
+  try {
+    const r: AssetProbeResult = await assetProbeApi.probe({
+      asset_type: 'fund',
+      asset_code: form.value.asset_code
+    })
+    const fd = (form.value.fund_detail ||= {} as FundDetail)
+    let filled = 0
+    const fillStr = (
+      cur: string | undefined | null,
+      next?: string
+    ): string | undefined => {
+      if (next && (cur === '' || cur === null || cur === undefined)) {
+        filled++
+        return next
+      }
+      return cur ?? undefined
+    }
+    form.value.name = fillStr(form.value.name, r.name) || form.value.name
+    fd.company = fillStr(fd.company, r.company)
+    fd.manager = fillStr(fd.manager, r.manager)
+    fd.fund_type = fillStr(fd.fund_type, r.fund_type)
+    fd.latest_nav = fillStr(fd.latest_nav as string | undefined, r.latest_nav)
+    fd.latest_nav_date = fillStr(fd.latest_nav_date, r.nav_date)
+    if (filled > 0) {
+      ElMessage.success(`已自动填充 ${filled} 个字段`)
+    } else {
+      ElMessage.info('已是最新信息（未覆盖已填字段）')
+    }
+  } catch {
+    /* http.ts 拦截器已弹错误提示；表单保持原状，不阻塞手动录入 */
+  } finally {
+    probing.value = false
+  }
 }
 
 // 提交前清洗：把空串数值/日期字段去掉，避免后端 decimal/time 解析失败
@@ -408,7 +452,16 @@ const platformName = computed(() => (id?: number | null) => platformStore.nameOf
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="基金代码" required>
-              <el-input v-model="form.asset_code" placeholder="例如 110022" />
+              <el-input v-model="form.asset_code" placeholder="例如 110022">
+                <template #append>
+                  <el-button
+                    :icon="Download"
+                    :disabled="!form.asset_code"
+                    :loading="probing"
+                    @click="onProbeFund"
+                  >获取信息</el-button>
+                </template>
+              </el-input>
             </el-form-item>
           </el-col>
           <el-col :span="12">

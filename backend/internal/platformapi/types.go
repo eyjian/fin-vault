@@ -55,3 +55,48 @@ type QuoteFetcher interface {
 	// FetchOne 抓取单个资产行情。
 	FetchOne(ctx context.Context, a AssetKey) (*QuoteResult, error)
 }
+
+// === 资产元信息 Fetcher（用于录入页"按代码自动填充"）===
+
+// AssetMeta 资产可公开获取的元信息探测结果。
+//
+// 设计原则：
+//   - decimal/time 字段使用 zero value 表示缺失（解析侧自行判断 IsZero）；
+//   - 字符串字段空串表示缺失；
+//   - 同一结构体复用于基金 / 股票，按 AssetType 分别填充对应字段，互不冲突。
+type AssetMeta struct {
+	// 通用
+	Name   string // 资产名称（基金 / 股票名）
+	Source string // 数据来源，例如 "api_eastmoney"
+
+	// 基金专属
+	Company   string          // 基金公司
+	Manager   string          // 基金经理（多人时取首位 / 拼接，由实现决定）
+	FundType  string          // equity / bond / hybrid / money / index / qdii
+	LatestNAV decimal.Decimal // 最新单位净值
+	NAVDate   time.Time       // 净值日期
+
+	// 股票专属
+	Market      string          // 推断后的市场：SH / SZ / BJ（HK/US 不做推断）
+	Industry    string          // 所属行业（A 股 f127）
+	Sector      string          // 所属板块（A 股 f128）
+	ListingDate time.Time       // 上市日期（A 股 f189，YYYYMMDD）
+	LatestPrice decimal.Decimal // 当前价（已换算到元）
+}
+
+// AssetMetaFetcher 资产元信息探测能力。
+//
+// 与 QuoteFetcher 的差别：
+//   - QuoteFetcher 关注价格/涨跌幅/成交量等"行情快照"，被 QuoteAggregator 在"批量刷新行情"
+//     场景高频调用；
+//   - AssetMetaFetcher 关注名称/公司/经理/行业/板块/上市日等"元信息"，仅被资产录入表单
+//     "按代码探测"低频调用，独立链路、独立端点（基金详情 / 股票扩展字段）。
+type AssetMetaFetcher interface {
+	// Source 标识来源（与 QuoteFetcher 一致风格）。
+	Source() string
+	// Supports 返回是否支持给定资产。元信息探测当前仅覆盖 fund / stock。
+	Supports(a AssetKey) bool
+	// FetchMeta 拉取一条元信息。失败时返回 wrap error；
+	// 远端无数据返回 ErrNoData；不支持的 AssetType/Market 返回 ErrUnsupportedAsset。
+	FetchMeta(ctx context.Context, a AssetKey) (*AssetMeta, error)
+}

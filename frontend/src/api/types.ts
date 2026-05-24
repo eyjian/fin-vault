@@ -275,3 +275,39 @@ export interface PulseDiagnosisResult {
 export interface PulseDiagnosisResp {
   items: PulseDiagnosisResult[]
 }
+
+// =====================================================================
+// 资产录入"按代码自动填充"（asset-form-autofill）
+// =====================================================================
+
+// GET /api/v1/assets/probe 响应：可公开获取的资产元信息。
+//
+// 字段约定：
+//   - 后端使用 omitempty 序列化，除 source 外所有字段都是可选的；
+//   - 数值字段（latest_nav / latest_price）在响应里是字符串，与系统的 decimal 字符串约定一致；
+//   - 日期字段（nav_date / listing_date）格式 YYYY-MM-DD。
+//
+// 前端"仅填空"策略要点：把 result 中非空值写入 form 中"为空"的对应字段，
+// 保留用户已填内容；详见 FundManage.vue / StockManage.vue。
+export interface AssetProbeResult {
+  source: string
+  name?: string
+  // fund-only
+  company?: string
+  manager?: string
+  fund_type?: string
+  latest_nav?: string
+  nav_date?: string
+  // stock-only
+  market?: 'SH' | 'SZ' | 'HK' | 'US' | 'BJ'
+  industry?: string
+  sector?: string
+  listing_date?: string
+  latest_price?: string
+}
+
+export interface AssetProbeParams {
+  asset_type: 'fund' | 'stock'
+  asset_code: string
+  market?: 'SH' | 'SZ' | 'HK' | 'US' | 'BJ'
+}

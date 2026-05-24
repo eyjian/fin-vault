@@ -84,10 +84,12 @@ var (
 
 var (
 	// Asset
-	ErrAssetNotFound    = New(30001, "asset not found")
-	ErrAssetDuplicated  = New(30002, "asset already exists")
-	ErrAssetTypeInvalid = New(30003, "invalid asset type")
-	ErrAssetCodeInvalid = New(30004, "invalid asset code format")
+	ErrAssetNotFound      = New(30001, "asset not found")
+	ErrAssetDuplicated    = New(30002, "asset already exists")
+	ErrAssetTypeInvalid   = New(30003, "invalid asset type")
+	ErrAssetCodeInvalid   = New(30004, "invalid asset code format")
+	ErrAssetProbeNotFound = New(30005, "asset probe not found")
+	ErrAssetProbeUpstream = New(30006, "asset probe upstream error")
 
 	// Holding
 	ErrHoldingNotFound   = New(30101, "holding not found")

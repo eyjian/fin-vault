@@ -104,9 +104,17 @@ func Wire(cfg *Config) (*App, error) {
 
 	// 6. Tools 注册由 §9 装配阶段完成（agent.NewToolsetAgentFactory + Runner 装配）。
 
+	// 6.x Asset Meta Fetcher（资产录入页“按代码自动填充”）
+	//
+	// 与 QuoteAggregator 解耦：仅供 AssetProbeService 使用，行情刷新链路不依赖。
+	// 失败语义：fetcher 永远可构造（resty 客户端 + 默认 baseURL），不会返回 nil。
+	metaFetcher := platformapi.NewEastmoneyMetaFetcher(httpTimeout)
+	sinaMetaFetcher := platformapi.NewSinaMetaFetcher(httpTimeout)
+
 	// 7. Services
 	holdingSvc := service.NewHoldingService(repos.Holding, repos.Asset, repos.Quote, repos.Rate, repos.Platform)
 	assetSvc := service.NewAssetService(repos.UoW, repos.Asset, repos.Platform, holdingSvc)
+	assetProbeSvc := service.NewAssetProbeService(metaFetcher, sinaMetaFetcher)
 	txnSvc := service.NewTransactionService(repos.UoW, repos.Transaction, repos.Holding, repos.Asset)
 	quoteSvc := service.NewQuoteService(repos.Quote, repos.Asset, cacheProv, aggregator, cfg.Quote.CacheTTL)
 	rateSvc := service.NewRateService(repos.Rate)
@@ -116,7 +124,7 @@ func Wire(cfg *Config) (*App, error) {
 	// 8. Handlers
 	handlers := &Handlers{
 		Meta:        handler.NewMetaHandler(assetSvc, "v1.0-impl"),
-		Asset:       handler.NewAssetHandler(assetSvc),
+		Asset:       handler.NewAssetHandler(assetSvc, assetProbeSvc),
 		Holding:     handler.NewHoldingHandler(holdingSvc),
 		Transaction: handler.NewTransactionHandler(txnSvc),
 		Quote:       handler.NewQuoteHandler(quoteSvc),
