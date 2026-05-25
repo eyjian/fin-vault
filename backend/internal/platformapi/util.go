@@ -2,7 +2,12 @@ package platformapi
 
 import (
 	"fmt"
+	"io"
 	"strings"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 )
 
 // extractJSONString 从未严格 JSON 化的文本中提取 "key":"value" 中的 value，并解码 \uxxxx 转义。
@@ -129,4 +134,34 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// ensureUTF8 自动判断字符串是否已经是合法 UTF-8；若不是则尝试按 GBK 解码。
+//
+// 用途：新浪 hq.sinajs.cn 等中文站点返回 GBK 编码的中文，但响应头不声明字符集，
+// resty 的 resp.String() 会按 ISO-8859-1 / 默认 UTF-8 解读，导致中文显示为 �。
+//
+// 实现策略：
+//  1. utf8.ValidString 判断当前字符串是否已经是合法 UTF-8；
+//  2. 不合法则按 GBK 解码后转为 UTF-8 返回；
+//  3. GBK 解码也失败则原样返回（避免吞错；调用方依然会拿到原值，至少不更糟）。
+func ensureUTF8(s string) string {
+	if s == "" || utf8.ValidString(s) {
+		return s
+	}
+	decoded, err := gbkToUTF8(s)
+	if err != nil {
+		return s
+	}
+	return decoded
+}
+
+// gbkToUTF8 把 GBK / GB18030 字节流解码为 UTF-8 字符串。
+func gbkToUTF8(s string) (string, error) {
+	reader := transform.NewReader(strings.NewReader(s), simplifiedchinese.GBK.NewDecoder())
+	out, err := io.ReadAll(reader)
+	if err != nil {
+		return "", fmt.Errorf("gbk decode: %w", err)
+	}
+	return string(out), nil
 }

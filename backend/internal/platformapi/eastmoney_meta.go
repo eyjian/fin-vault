@@ -109,14 +109,14 @@ func (f *eastmoneyMetaFetcher) fetchFundMeta(ctx context.Context, a AssetKey) (*
 		return nil, ErrNoData
 	}
 	meta := &AssetMeta{
-		Name:   name,
+		Name:   ensureUTF8(name),
 		Source: f.Source(),
 	}
 	if v := extractJSVarString(body, "jjglr"); v != "" {
-		meta.Company = v
+		meta.Company = ensureUTF8(v)
 	}
 	if v := extractCurrentFundManagerName(body); v != "" {
-		meta.Manager = v
+		meta.Manager = ensureUTF8(v)
 	}
 	if v := extractFundType(body); v != "" {
 		meta.FundType = v
@@ -220,6 +220,8 @@ func (f *eastmoneyMetaFetcher) fetchStockMeta(ctx context.Context, a AssetKey) (
 	if name == "" {
 		return nil, ErrNoData
 	}
+	// 防御性兜底：如果远端返回了非 UTF-8 字节（极少见但不可控），尝试按 GBK 解码
+	name = ensureUTF8(name)
 	meta := &AssetMeta{
 		Name:   name,
 		Source: f.Source(),
@@ -234,10 +236,10 @@ func (f *eastmoneyMetaFetcher) fetchStockMeta(ctx context.Context, a AssetKey) (
 	if isAShareMarket(market) {
 		// f127 / f128 仅在 A 股稳定，港美股略过
 		if v := extractJSONString(body, "f127"); v != "" {
-			meta.Industry = v
+			meta.Industry = ensureUTF8(v)
 		}
 		if v := extractJSONString(body, "f128"); v != "" {
-			meta.Sector = v
+			meta.Sector = ensureUTF8(v)
 		}
 	}
 	if s := extractJSONNumber(body, "f189"); s != "" && len(s) == 8 {

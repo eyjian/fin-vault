@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
 func TestExtractJSONString(t *testing.T) {
@@ -118,4 +120,63 @@ func TestParseHexRune(t *testing.T) {
 			assert.Error(t, err)
 		}
 	}
+}
+
+// gbkEncode 测试辅助：把 UTF-8 字符串编码为 GBK 字节序列。
+func gbkEncode(t *testing.T, s string) string {
+	t.Helper()
+	encoder := simplifiedchinese.GBK.NewEncoder()
+	out, err := encoder.String(s)
+	require.NoError(t, err)
+	return out
+}
+
+func TestEnsureUTF8(t *testing.T) {
+	t.Run("already valid UTF-8 returns as-is", func(t *testing.T) {
+		assert.Equal(t, "hello", ensureUTF8("hello"))
+		assert.Equal(t, "贵州茅台", ensureUTF8("贵州茅台"))
+		assert.Equal(t, "大族激光", ensureUTF8("大族激光"))
+	})
+
+	t.Run("empty string returns empty", func(t *testing.T) {
+		assert.Equal(t, "", ensureUTF8(""))
+	})
+
+	t.Run("GBK-encoded Chinese is decoded to UTF-8", func(t *testing.T) {
+		gbk := gbkEncode(t, "大族激光")
+		assert.Equal(t, "大族激光", ensureUTF8(gbk))
+	})
+
+	t.Run("GBK-encoded stock name 002190", func(t *testing.T) {
+		// 模拟新浪返回 GBK 并被 resp.String() 原样转为 string 的乱码场景
+		gbk := gbkEncode(t, "大族激光")
+		got := ensureUTF8(gbk)
+		assert.Equal(t, "大族激光", got)
+	})
+
+	t.Run("plain ASCII unchanged", func(t *testing.T) {
+		assert.Equal(t, "AAPL", ensureUTF8("AAPL"))
+		assert.Equal(t, "002190", ensureUTF8("002190"))
+	})
+}
+
+func TestGbkToUTF8(t *testing.T) {
+	t.Run("valid GBK Chinese", func(t *testing.T) {
+		gbk := gbkEncode(t, "贵州茅台")
+		got, err := gbkToUTF8(gbk)
+		require.NoError(t, err)
+		assert.Equal(t, "贵州茅台", got)
+	})
+
+	t.Run("ASCII passthrough", func(t *testing.T) {
+		got, err := gbkToUTF8("hello")
+		require.NoError(t, err)
+		assert.Equal(t, "hello", got)
+	})
+
+	t.Run("empty string", func(t *testing.T) {
+		got, err := gbkToUTF8("")
+		require.NoError(t, err)
+		assert.Equal(t, "", got)
+	})
 }

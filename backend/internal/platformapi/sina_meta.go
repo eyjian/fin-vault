@@ -118,6 +118,8 @@ func (f *sinaMetaFetcher) FetchMeta(ctx context.Context, a AssetKey) (*AssetMeta
 	if name == "" {
 		return nil, ErrNoData
 	}
+	// 新浪 hq.sinajs.cn 返回 GBK 编码，确保转为 UTF-8 避免中文乱码
+	name = ensureUTF8(name)
 
 	meta := &AssetMeta{
 		Name:   name,
