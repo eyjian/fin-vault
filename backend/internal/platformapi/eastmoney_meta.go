@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -281,14 +282,33 @@ func (f *eastmoneyMetaFetcher) enrichStockMetaFromF10(ctx context.Context, code,
 		"&columns=SECUCODE,SECURITY_CODE,SECURITY_NAME_ABBR,INDUSTRYCSRC1,EM2016,LISTING_DATE"+
 		`&filter=(SECUCODE=%%22%s%%22)`+
 		"&pageNumber=1&pageSize=1", f.stockF10BaseURL, secucode)
+
+	slog.Debug("eastmoney F10 request", slog.String("secucode", secucode), slog.String("url", url))
+
 	resp, err := f.client.R().SetContext(ctx).Get(url)
-	if err != nil || resp.StatusCode() != 200 {
+	if err != nil {
+		slog.Warn("eastmoney F10 http error", slog.String("secucode", secucode), slog.String("err", err.Error()))
+		return
+	}
+	if resp.StatusCode() != 200 {
+		slog.Warn("eastmoney F10 non-200",
+			slog.String("secucode", secucode),
+			slog.Int("status", resp.StatusCode()),
+			slog.String("body_preview", truncate(resp.String(), 200)))
 		return
 	}
 	body := resp.String()
 	if body == "" || !strings.Contains(body, `"data"`) {
+		slog.Warn("eastmoney F10 empty/no-data",
+			slog.String("secucode", secucode),
+			slog.String("body_preview", truncate(body, 200)))
 		return
 	}
+
+	industryBefore := meta.Industry
+	sectorBefore := meta.Sector
+	listingBefore := meta.ListingDate
+
 	if meta.Industry == "" {
 		if v := extractJSONString(body, "INDUSTRYCSRC1"); v != "" {
 			meta.Industry = ensureUTF8(v)
@@ -311,6 +331,14 @@ func (f *eastmoneyMetaFetcher) enrichStockMetaFromF10(ctx context.Context, code,
 			}
 		}
 	}
+
+	slog.Info("eastmoney F10 enriched",
+		slog.String("secucode", secucode),
+		slog.String("industry_before", industryBefore),
+		slog.String("industry_after", meta.Industry),
+		slog.String("sector_before", sectorBefore),
+		slog.String("sector_after", meta.Sector),
+		slog.Bool("listing_filled", listingBefore.IsZero() && !meta.ListingDate.IsZero()))
 }
 
 // inferStockMarket 按 A 股代码前缀推断市场。
