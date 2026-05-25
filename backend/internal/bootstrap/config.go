@@ -356,100 +356,40 @@ func expandEnv(s string) string {
 // configPath 记录配置文件路径，用于 SaveConfig 回写。
 var configPath string
 
-// SaveConfig 将内存中的配置回写到 yaml 文件。
+// SaveConfig 将内存中的 data_providers 配置回写到 yaml 文件。
 //
-// 注意：只回写可直接序列化的字段（string/bool/int 等）；
-// 派生字段（HTTPTimeout 等 time.Duration 类型标记 mapstructure:"-"）不会写回。
+// 仅更新 data_providers 段，保留文件其余内容（注释、格式、环境变量占位符等）。
+// 这样可以避免将运行时展开后的环境变量值（如 API Key）明文写入配置文件。
 func SaveConfig(cfg *Config) error {
 	if configPath == "" {
 		return fmt.Errorf("config path not set, cannot save")
 	}
+
+	// 1. 读取原始文件作为基底（保留注释与格式）
 	v := viper.New()
 	v.SetConfigFile(configPath)
 	v.SetConfigType("yaml")
-
-	// 将 cfg 结构体反向映射回 viper
-	if err := v.MergeConfigMap(structToMap(cfg)); err != nil {
-		return fmt.Errorf("merge config map: %w", err)
+	if err := v.ReadInConfig(); err != nil {
+		return fmt.Errorf("read config for update: %w", err)
 	}
 
+	// 2. 仅合并 data_providers 段
+	dpMap := map[string]any{
+		"data_providers": map[string]any{
+			"tushare": map[string]any{
+				"enabled":  cfg.DataProviders.Tushare.Enabled,
+				"token":    cfg.DataProviders.Tushare.Token,
+				"base_url": cfg.DataProviders.Tushare.BaseURL,
+			},
+		},
+	}
+	if err := v.MergeConfigMap(dpMap); err != nil {
+		return fmt.Errorf("merge data_providers: %w", err)
+	}
+
+	// 3. 写回
 	if err := v.WriteConfig(); err != nil {
 		return fmt.Errorf("write config to %s: %w", configPath, err)
 	}
 	return nil
-}
-
-// structToMap 将 Config 结构体转为 map[string]any 供 viper.MergeConfigMap 使用。
-func structToMap(cfg *Config) map[string]any {
-	// 使用 viper 的逻辑键名（mapstructure tag）
-	m := make(map[string]any)
-	m["server"] = map[string]any{
-		"host":          cfg.Server.Host,
-		"port":          cfg.Server.Port,
-		"mode":          cfg.Server.Mode,
-		"read_timeout":  cfg.Server.ReadTimeout.String(),
-		"write_timeout": cfg.Server.WriteTimeout.String(),
-		"cors_origins":  cfg.Server.CORSOrigins,
-	}
-	m["database"] = map[string]any{
-		"driver":            cfg.Database.Driver,
-		"dsn":               cfg.Database.DSN,
-		"auto_migrate":      cfg.Database.AutoMigrate,
-		"log_level":         cfg.Database.LogLevel,
-		"max_idle_conns":    cfg.Database.MaxIdleConns,
-		"max_open_conns":    cfg.Database.MaxOpenConns,
-		"conn_max_lifetime": cfg.Database.ConnMaxLifetime.String(),
-	}
-	m["cache"] = map[string]any{"driver": cfg.Cache.Driver}
-	if cfg.Cache.Driver == "redis" {
-		m["cache"].(map[string]any)["redis"] = map[string]any{
-			"addr":     cfg.Cache.Redis.Addr,
-			"password": cfg.Cache.Redis.Password,
-			"db":       cfg.Cache.Redis.DB,
-		}
-	}
-	m["log"] = map[string]any{
-		"level":        cfg.Log.Level,
-		"format":       cfg.Log.Format,
-		"file":         cfg.Log.File,
-		"max_size_mb":  cfg.Log.MaxSizeMB,
-		"max_backups":  cfg.Log.MaxBackups,
-		"max_age_days": cfg.Log.MaxAgeDays,
-		"compress":     cfg.Log.Compress,
-		"console":      cfg.Log.Console,
-	}
-	m["auth"] = map[string]any{
-		"mode":            cfg.Auth.Mode,
-		"default_user_id": cfg.Auth.DefaultUserID,
-	}
-	m["security"] = map[string]any{"encryption_key": cfg.Security.EncryptionKey}
-	m["llm"] = map[string]any{"default": cfg.LLM.Default}
-	m["ai"] = map[string]any{
-		"session": map[string]any{
-			"max_steps_size_mb": cfg.AI.Session.MaxStepsSizeMB,
-			"history_window":    cfg.AI.Session.HistoryWindow,
-		},
-		"pulse_diagnosis": map[string]any{
-			"concurrency": cfg.AI.PulseDiagnosis.Concurrency,
-		},
-	}
-	m["quote"] = map[string]any{
-		"source_priority":  cfg.Quote.SourcePriority,
-		"http_timeout_sec": cfg.Quote.HTTPTimeoutSec,
-		"cache_ttl_sec":    cfg.Quote.CacheTTLSec,
-		"pool_size":        cfg.Quote.PoolSize,
-	}
-	m["cron"] = map[string]any{"mature": cfg.Cron.Mature}
-	m["jwt"] = map[string]any{
-		"secret": cfg.JWT.Secret,
-		"expire": cfg.JWT.Expire.String(),
-	}
-	m["data_providers"] = map[string]any{
-		"tushare": map[string]any{
-			"enabled":  cfg.DataProviders.Tushare.Enabled,
-			"token":    cfg.DataProviders.Tushare.Token,
-			"base_url": cfg.DataProviders.Tushare.BaseURL,
-		},
-	}
-	return m
 }
