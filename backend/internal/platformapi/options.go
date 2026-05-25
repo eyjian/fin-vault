@@ -20,6 +20,7 @@ type fetcherConfig struct {
 	fundBaseURL       string // 默认 https://fundgz.1234567.com.cn
 	fundDetailBaseURL string // 默认 https://fund.eastmoney.com（基金元信息：pingzhongdata）
 	stockBaseURL      string // 默认 https://push2.eastmoney.com
+	stockF10BaseURL   string // 默认 https://datacenter.eastmoney.com（股票 F10 基本资料：行业/板块/上市日）
 
 	// sina
 	sinaBaseURL string // 默认 https://hq.sinajs.cn
@@ -38,6 +39,7 @@ func defaultConfig(timeout time.Duration) *fetcherConfig {
 		fundBaseURL:       "https://fundgz.1234567.com.cn",
 		fundDetailBaseURL: "https://fund.eastmoney.com",
 		stockBaseURL:      "https://push2.eastmoney.com",
+		stockF10BaseURL:   "https://datacenter.eastmoney.com",
 		sinaBaseURL:       "https://hq.sinajs.cn",
 		tencentBaseURL:    "https://qt.gtimg.cn",
 	}
@@ -73,6 +75,18 @@ func WithStockBaseURL(url string) FetcherOption {
 	return func(c *fetcherConfig) {
 		if url != "" {
 			c.stockBaseURL = trimRightSlash(url)
+		}
+	}
+}
+
+// WithStockF10BaseURL 覆盖东方财富股票 F10 基本资料端点 baseURL（仅测试用）。
+//
+// 默认指向 https://datacenter.eastmoney.com，资产元信息探测会请求
+// {URL}/securities/api/data/v1/get?... 解析行业/板块/上市日（push2 接口字段不稳定时的补充源）。
+func WithStockF10BaseURL(url string) FetcherOption {
+	return func(c *fetcherConfig) {
+		if url != "" {
+			c.stockF10BaseURL = trimRightSlash(url)
 		}
 	}
 }

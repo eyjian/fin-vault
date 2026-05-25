@@ -39,6 +39,7 @@ type eastmoneyMetaFetcher struct {
 	client            *resty.Client
 	fundDetailBaseURL string
 	stockBaseURL      string
+	stockF10BaseURL   string
 }
 
 // NewEastmoneyMetaFetcher 构造资产元信息 Fetcher。
@@ -59,6 +60,7 @@ func NewEastmoneyMetaFetcher(timeout time.Duration, opts ...FetcherOption) Asset
 		client:            c,
 		fundDetailBaseURL: cfg.fundDetailBaseURL,
 		stockBaseURL:      cfg.stockBaseURL,
+		stockF10BaseURL:   cfg.stockF10BaseURL,
 	}
 }
 
@@ -248,7 +250,67 @@ func (f *eastmoneyMetaFetcher) fetchStockMeta(ctx context.Context, a AssetKey) (
 			meta.ListingDate = t
 		}
 	}
+
+	// push2 接口对 A 股的 f127/f128/f189 实际返回常为空（接口定位是行情快照、非基本面）。
+	// 这里在 A 股缺失任一字段时调用 datacenter F10 接口补充，仅补空、不覆盖。
+	// F10调用失败不影响主路径，以保证名称/价格、获取体验不受影响。
+	if isAShareMarket(market) && (meta.Industry == "" || meta.Sector == "" || meta.ListingDate.IsZero()) {
+		f.enrichStockMetaFromF10(ctx, a.AssetCode, market, meta)
+	}
 	return meta, nil
+}
+
+// enrichStockMetaFromF10 调用东方财富 datacenter F10 基本资料接口，补充行业/板块/上市日。
+//
+// 接口示例：
+//
+//	https://datacenter.eastmoney.com/securities/api/data/v1/get
+//	  ?reportName=RPT_F10_BASIC_ORGINFO
+//	  &columns=SECUCODE,SECURITY_CODE,SECURITY_NAME_ABBR,INDUSTRYCSRC1,EM2016,LISTING_DATE
+//	  &filter=(SECUCODE="002190.SZ")
+//	  &pageNumber=1&pageSize=1
+//
+// 返回表现为标准 JSON：{"result":{"data":[{"INDUSTRYCSRC1":"车辆装备","EM2016":"汽车零部件","LISTING_DATE":"2009-08-18 00:00:00"}]}}。
+//
+// 该函数仅“补空”：然后代码中已有值的字段不会被覆盖。所有异常（网络、解析、字段缺失）
+// 均 graceful degrade：记录事后不招起件、不使主路径失败。
+func (f *eastmoneyMetaFetcher) enrichStockMetaFromF10(ctx context.Context, code, market string, meta *AssetMeta) {
+	secucode := code + "." + market // 如 002190.SZ
+	url := fmt.Sprintf("%s/securities/api/data/v1/get"+
+		"?reportName=RPT_F10_BASIC_ORGINFO"+
+		"&columns=SECUCODE,SECURITY_CODE,SECURITY_NAME_ABBR,INDUSTRYCSRC1,EM2016,LISTING_DATE"+
+		`&filter=(SECUCODE=%%22%s%%22)`+
+		"&pageNumber=1&pageSize=1", f.stockF10BaseURL, secucode)
+	resp, err := f.client.R().SetContext(ctx).Get(url)
+	if err != nil || resp.StatusCode() != 200 {
+		return
+	}
+	body := resp.String()
+	if body == "" || !strings.Contains(body, `"data"`) {
+		return
+	}
+	if meta.Industry == "" {
+		if v := extractJSONString(body, "INDUSTRYCSRC1"); v != "" {
+			meta.Industry = ensureUTF8(v)
+		}
+	}
+	if meta.Sector == "" {
+		if v := extractJSONString(body, "EM2016"); v != "" {
+			meta.Sector = ensureUTF8(v)
+		}
+	}
+	if meta.ListingDate.IsZero() {
+		if v := extractJSONString(body, "LISTING_DATE"); v != "" {
+			// 样式 "2009-08-18 00:00:00" 或 "2009-08-18"
+			layouts := []string{"2006-01-02 15:04:05", "2006-01-02"}
+			for _, layout := range layouts {
+				if t, err := time.ParseInLocation(layout, v, time.Local); err == nil {
+					meta.ListingDate = t
+					break
+				}
+			}
+		}
+	}
 }
 
 // inferStockMarket 按 A 股代码前缀推断市场。
