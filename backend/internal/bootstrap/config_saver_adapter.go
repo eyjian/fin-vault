@@ -25,7 +25,9 @@ func NewConfigSaverAdapter(cfg *Config, sysConfigRepo repository.SysConfigReposi
 	return &configSaverAdapter{cfg: cfg, sysConfigRepo: sysConfigRepo}
 }
 
-// SaveDataProviders 更新 data_providers 配置并持久化（DB + config.yaml）。
+// SaveDataProviders 更新 data_providers 配置并持久化到 DB。
+//
+// 页面可设置的配置仅保存到 DB，不再回写 config.yaml。
 func (a *configSaverAdapter) SaveDataProviders(dp *handler.DataProvidersConfig) error {
 	a.cfg.DataProviders.Tushare.Enabled = dp.Tushare.Enabled
 	if dp.Tushare.Token != "" {
@@ -35,7 +37,7 @@ func (a *configSaverAdapter) SaveDataProviders(dp *handler.DataProvidersConfig) 
 		a.cfg.DataProviders.Tushare.BaseURL = dp.Tushare.BaseURL
 	}
 
-	// 持久化到 DB
+	// 仅持久化到 DB
 	ctx := context.Background()
 	if err := a.sysConfigRepo.Upsert(ctx, &repository.SysConfigEntry{
 		Category: domain.SysConfigCategoryTushare,
@@ -61,12 +63,6 @@ func (a *configSaverAdapter) SaveDataProviders(dp *handler.DataProvidersConfig) 
 		}); err != nil {
 			slog.Error("save tushare base_url to db failed", "err", err)
 		}
-	}
-
-	// 同时持久化到 config.yaml（保留文件与 DB 的双向同步）
-	if err := SaveConfig(a.cfg); err != nil {
-		slog.Error("save config to yaml failed", "err", err)
-		return err
 	}
 	return nil
 }

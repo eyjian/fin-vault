@@ -356,10 +356,11 @@ func expandEnv(s string) string {
 // configPath 记录配置文件路径，用于 SaveConfig 回写。
 var configPath string
 
-// SaveConfig 将内存中的 data_providers 配置回写到 yaml 文件。
+// SaveConfig 将内存中的非敏感配置回写到 yaml 文件。
 //
-// 仅更新 data_providers 段，保留文件其余内容（注释、格式、环境变量占位符等）。
-// 这样可以避免将运行时展开后的环境变量值（如 API Key）明文写入配置文件。
+// 注意：data_providers.tushare.token 和 llm.providers.*.api_key 等敏感字段
+// 已保存到 DB（通过页面设置页配置），不再写入配置文件。
+// 仅更新非敏感段（如 server/database/cache/log 等）。
 func SaveConfig(cfg *Config) error {
 	if configPath == "" {
 		return fmt.Errorf("config path not set, cannot save")
@@ -373,18 +374,14 @@ func SaveConfig(cfg *Config) error {
 		return fmt.Errorf("read config for update: %w", err)
 	}
 
-	// 2. 仅合并 data_providers 段
-	dpMap := map[string]any{
-		"data_providers": map[string]any{
-			"tushare": map[string]any{
-				"enabled":  cfg.DataProviders.Tushare.Enabled,
-				"token":    cfg.DataProviders.Tushare.Token,
-				"base_url": cfg.DataProviders.Tushare.BaseURL,
-			},
-		},
+	// 2. 合并非敏感段
+	nonSensitiveMap := map[string]any{
+		"server": map[string]any{"host": cfg.Server.Host, "port": cfg.Server.Port, "mode": cfg.Server.Mode},
+		"cache":  map[string]any{"driver": cfg.Cache.Driver},
+		"log":    map[string]any{"level": cfg.Log.Level, "format": cfg.Log.Format},
 	}
-	if err := v.MergeConfigMap(dpMap); err != nil {
-		return fmt.Errorf("merge data_providers: %w", err)
+	if err := v.MergeConfigMap(nonSensitiveMap); err != nil {
+		return fmt.Errorf("merge non-sensitive config: %w", err)
 	}
 
 	// 3. 写回

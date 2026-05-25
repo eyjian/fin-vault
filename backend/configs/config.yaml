@@ -23,37 +23,38 @@ cache:
     db: 0
 
 # 多 Provider LLM 配置（路由由 default 指定，可被请求参数覆盖）
+# 敏感字段（api_key）仅在 DB 中保存，不写入配置文件
+# 页面设置可覆盖以下所有默认值
 llm:
   default: "deepseek"
   providers:
     deepseek:
       enabled: true
-      api_key: "${DEEPSEEK_API_KEY:}"        # 从环境变量读取，不要提交真实 key 到仓库
-      base_url: "https://api.deepseek.com"        # 官方推荐写法（OpenAI 兼容）
-      # 可选 model：deepseek-v4-flash / deepseek-v4-pro / deepseek-chat / deepseek-reasoner
+      # api_key 仅保存到 DB，通过页面设置页配置
+      base_url: "https://api.deepseek.com"
       model: "deepseek-v4-pro"
       timeout_sec: 60
     glm:
       enabled: false
-      api_key: "${GLM_API_KEY:}"
+      # api_key 仅保存到 DB，通过页面设置页配置
       base_url: "https://open.bigmodel.cn/api/paas/v4"
       model: "glm-4-flash"
       timeout_sec: 60
     kimi:
       enabled: false
-      api_key: "${KIMI_API_KEY:}"
+      # api_key 仅保存到 DB，通过页面设置页配置
       base_url: "https://api.moonshot.cn/v1"
       model: "moonshot-v1-8k"
       timeout_sec: 60
     qwen:
       enabled: false
-      api_key: "${QWEN_API_KEY:}"
+      # api_key 仅保存到 DB，通过页面设置页配置
       base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
       model: "qwen-turbo"
       timeout_sec: 60
     ollama:
       enabled: false
-      api_key: "${OLLAMA_API_KEY:}"        # 本地 ollama 可以留空
+      # api_key 仅保存到 DB，通过页面设置页配置
       base_url: "http://127.0.0.1:11434/v1"
       model: "qwen2.5:7b"
       timeout_sec: 120
@@ -71,10 +72,12 @@ quote:
   pool_size: 16
 
 # 多 API 服务商数据源（基金净值等）
+# 敏感字段（token）仅在 DB 中保存，不写入配置文件
+# 页面设置可覆盖以下所有默认值
 data_providers:
   tushare:
     enabled: false                     # 启用 Tushare Pro 数据源
-    token: "${FINVAULT_DATA_PROVIDERS_TUSHARE_TOKEN:}"  # Tushare API Token，从环境变量读取
+    # token 仅保存到 DB，通过页面设置页配置
     base_url: "https://api.tushare.pro" # Tushare Pro API 地址
 
 # 定时任务
