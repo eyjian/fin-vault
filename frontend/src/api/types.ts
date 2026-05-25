@@ -329,9 +329,23 @@ export interface DataProvidersConfig {
 }
 
 // =====================================================================
+// AI 服务商配置（DeepSeek / OpenAI 等）
+// =====================================================================
+
+export interface AIProviderConfig {
+  name: string       // 服务商标识：deepseek / openai / ...
+  enabled: boolean   // 是否启用
+  api_key: string    // API Key（脱敏显示）
+  base_url: string   // 自定义 API 地址（可选）
+  model: string      // 默认模型名称（可选）
+}
+
+// =====================================================================
 // 后端配置（用于设置页读写）
 // =====================================================================
 
 export interface BackendConfig {
   data_providers: DataProvidersConfig
+  ai_providers: AIProviderConfig[]
+  llm_default: string
 }

@@ -1,15 +1,19 @@
 package bootstrap
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"time"
 
 	"gorm.io/gorm"
 
 	"github.com/eyjian/fin-vault/backend/internal/cache"
+	"github.com/eyjian/fin-vault/backend/internal/domain"
 	"github.com/eyjian/fin-vault/backend/internal/handler"
+	llmmodel "github.com/eyjian/fin-vault/backend/internal/llm/model"
 	"github.com/eyjian/fin-vault/backend/internal/llm/session"
 	"github.com/eyjian/fin-vault/backend/internal/platformapi"
 	"github.com/eyjian/fin-vault/backend/internal/repository"
@@ -80,7 +84,11 @@ func Wire(cfg *Config) (*App, error) {
 		Quote:          gormrepo.NewQuoteRepository(db),
 		Rate:           gormrepo.NewRateRepository(db),
 		PulseDiagnosis: gormrepo.NewPulseDiagnosisRepository(db),
+		SysConfig:      gormrepo.NewSysConfigRepository(db),
 	}
+
+	// 3.x 从 DB 加载系统配置覆盖 viper 的 DataProviders 和 LLM 配置
+	applyDBConfigOverrides(cfg, repos.SysConfig)
 
 	// 4. LLM 装配（§9 实装）
 	//
@@ -187,7 +195,7 @@ func Wire(cfg *Config) (*App, error) {
 	}
 
 	// 9.1 Config handler（设置页数据源配置读写）
-	configSaver := NewConfigSaverAdapter(cfg)
+	configSaver := NewConfigSaverAdapter(cfg, repos.SysConfig)
 	handlers.Config = handler.NewConfigHandler(configSaver)
 
 	// 9.2 Cron
@@ -220,5 +228,81 @@ func (a *App) Close() {
 		if sqlDB, err := a.DB.DB(); err == nil {
 			_ = sqlDB.Close()
 		}
+	}
+}
+
+// applyDBConfigOverrides 从数据库加载系统配置覆盖 viper 已加载的值。
+//
+// 支持的分类：
+//   - tushare：覆盖 cfg.DataProviders.Tushare
+//   - deepseek：覆盖 cfg.LLM.Providers["deepseek"]
+//   - llm：覆盖 cfg.LLM.Default
+//
+// DB 中的值优先于 viper（即 DB 中已设置的配置项会覆盖 config.yaml 的值）。
+func applyDBConfigOverrides(cfg *Config, sysConfigRepo repository.SysConfigRepository) {
+	ctx := context.Background()
+
+	// 1. Tushare 配置覆盖
+	tushareConfigs, err := sysConfigRepo.GetByCategory(ctx, domain.SysConfigCategoryTushare)
+	if err != nil {
+		slog.Warn("load tushare config from db failed", "err", err)
+	} else {
+		for _, entry := range tushareConfigs {
+			switch entry.Key {
+			case "enabled":
+				if v, err := strconv.ParseBool(entry.Value); err == nil {
+					cfg.DataProviders.Tushare.Enabled = v
+				}
+			case "token":
+				if entry.Value != "" {
+					cfg.DataProviders.Tushare.Token = entry.Value
+				}
+			case "base_url":
+				if entry.Value != "" {
+					cfg.DataProviders.Tushare.BaseURL = entry.Value
+				}
+			}
+		}
+	}
+
+	// 2. DeepSeek / LLM 配置覆盖
+	llmConfigs, err := sysConfigRepo.GetByCategory(ctx, domain.SysConfigCategoryDeepSeek)
+	if err != nil {
+		slog.Warn("load deepseek config from db failed", "err", err)
+	} else {
+		if cfg.LLM.Providers == nil {
+			cfg.LLM.Providers = make(map[string]llmmodel.ProviderConfig)
+		}
+		dp := llmmodel.ProviderConfig{}
+		for _, entry := range llmConfigs {
+			switch entry.Key {
+			case "enabled":
+				if v, err := strconv.ParseBool(entry.Value); err == nil {
+					dp.Enabled = &v
+				}
+			case "api_key":
+				dp.APIKey = entry.Value
+			case "base_url":
+				dp.BaseURL = entry.Value
+			case "model":
+				dp.Model = entry.Value
+			}
+		}
+		if dp.APIKey != "" || dp.BaseURL != "" {
+			if dp.IsEnabled() {
+				cfg.LLM.Providers["deepseek"] = dp
+				if cfg.LLM.Default == "" {
+					cfg.LLM.Default = "deepseek"
+				}
+			}
+		}
+	}
+
+	// 3. LLM 默认 provider 覆盖
+	llmGeneral, err := sysConfigRepo.Get(ctx, domain.SysConfigCategoryLLM, "default")
+	if err != nil {
+		slog.Warn("load llm default config from db failed", "err", err)
+	} else if llmGeneral != nil && llmGeneral.Value != "" {
+		cfg.LLM.Default = llmGeneral.Value
 	}
 }

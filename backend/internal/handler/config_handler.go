@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"fmt"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/eyjian/fin-vault/backend/pkg/errs"
@@ -20,10 +22,25 @@ type TushareConfig struct {
 	BaseURL string `json:"base_url"`
 }
 
+// AIProviderConfig AI 服务商配置（如 DeepSeek、OpenAI 等）。
+type AIProviderConfig struct {
+	Name    string `json:"name"`     // 服务商标识：deepseek / openai / ...
+	Enabled bool   `json:"enabled"`  // 是否启用
+	APIKey  string `json:"api_key"`  // API Key（脱敏显示）
+	BaseURL string `json:"base_url"` // 自定义 API 地址（可选）
+	Model   string `json:"model"`    // 默认模型名称（可选）
+}
+
 // ConfigSaver 持久化配置的回调接口（由 wire 注入 bootstrap.SaveConfig）。
 type ConfigSaver interface {
 	SaveDataProviders(cfg *DataProvidersConfig) error
 	GetDataProviders() *DataProvidersConfig
+	// AI 服务商配置
+	SaveAIProviders(providers []AIProviderConfig) error
+	GetAIProviders() []AIProviderConfig
+	// LLM 默认服务商
+	SaveLLMDefault(defaultProvider string) error
+	GetLLMDefault() string
 }
 
 // ConfigHandler 后端配置 HTTP 适配（用于前端设置页读写 API 服务商配置等）。
@@ -41,6 +58,12 @@ func (h *ConfigHandler) Register(r *gin.RouterGroup) {
 	g := r.Group("/config")
 	g.GET("/data_providers", h.getDataProviders)
 	g.PUT("/data_providers", h.updateDataProviders)
+	// AI 服务商配置
+	g.GET("/ai_providers", h.getAIProviders)
+	g.PUT("/ai_providers", h.updateAIProviders)
+	// LLM 默认服务商
+	g.GET("/llm_default", h.getLLMDefault)
+	g.PUT("/llm_default", h.updateLLMDefault)
 }
 
 // getDataProviders GET /config/data_providers
@@ -107,4 +130,88 @@ func maskToken(token string) string {
 		return "***"
 	}
 	return token[:4] + "***"
+}
+
+// getAIProviders GET /config/ai_providers
+//
+// 返回所有 AI 服务商配置（脱敏 api_key：仅显示前 4 位 + ***）。
+func (h *ConfigHandler) getAIProviders(c *gin.Context) {
+	providers := h.saver.GetAIProviders()
+	masked := make([]AIProviderConfig, 0, len(providers))
+	for _, p := range providers {
+		masked = append(masked, AIProviderConfig{
+			Name:    p.Name,
+			Enabled: p.Enabled,
+			APIKey:  maskToken(p.APIKey),
+			BaseURL: p.BaseURL,
+			Model:   p.Model,
+		})
+	}
+	response.OK(c, gin.H{"ai_providers": masked})
+}
+
+// updateAIProviders PUT /config/ai_providers
+//
+// 更新 AI 服务商配置并持久化。
+// 请求体：{"ai_providers": [{"name": "deepseek", "enabled": true, "api_key": "xxx", ...}]}
+func (h *ConfigHandler) updateAIProviders(c *gin.Context) {
+	var req struct {
+		AIProviders []AIProviderConfig `json:"ai_providers"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errs.ErrInvalidParam.WithCause(err))
+		return
+	}
+
+	if err := h.saver.SaveAIProviders(req.AIProviders); err != nil {
+		response.Fail(c, errs.ErrInternal.WithCause(err))
+		return
+	}
+
+	// 返回脱敏结果
+	saved := h.saver.GetAIProviders()
+	masked := make([]AIProviderConfig, 0, len(saved))
+	for _, p := range saved {
+		masked = append(masked, AIProviderConfig{
+			Name:    p.Name,
+			Enabled: p.Enabled,
+			APIKey:  maskToken(p.APIKey),
+			BaseURL: p.BaseURL,
+			Model:   p.Model,
+		})
+	}
+	response.OK(c, gin.H{"ai_providers": masked})
+}
+
+// getLLMDefault GET /config/llm_default
+//
+// 返回 LLM 默认服务商名称。
+func (h *ConfigHandler) getLLMDefault(c *gin.Context) {
+	defaultProvider := h.saver.GetLLMDefault()
+	response.OK(c, gin.H{"llm_default": defaultProvider})
+}
+
+// updateLLMDefault PUT /config/llm_default
+//
+// 更新 LLM 默认服务商并持久化。
+// 请求体：{"llm_default": "deepseek"}
+func (h *ConfigHandler) updateLLMDefault(c *gin.Context) {
+	var req struct {
+		LLMDefault string `json:"llm_default"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errs.ErrInvalidParam.WithCause(err))
+		return
+	}
+
+	if req.LLMDefault == "" {
+		response.Fail(c, errs.ErrInvalidParam.WithCause(fmt.Errorf("llm_default is empty")))
+		return
+	}
+
+	if err := h.saver.SaveLLMDefault(req.LLMDefault); err != nil {
+		response.Fail(c, errs.ErrInternal.WithCause(err))
+		return
+	}
+	response.OK(c, gin.H{"llm_default": req.LLMDefault})
 }

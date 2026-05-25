@@ -204,6 +204,81 @@ func (s *QuoteService) Refresh(ctx context.Context, userID uint, assetIDs []uint
 		}
 		// 失效缓存
 		_ = s.cache.Delete(ctx, cacheKeyQuote(r.AssetID))
+
+		// 对基金资产：回写 FundDetail 最新净值和净值日期
+		//
+		// 注意区分：
+		//   - LatestNAV = 最新确认的单位净值（来自 Tushare fund_nav 接口）
+		//   - r.Price = 盘中实时估值（来自 eastmoney 等实时行情源）
+		// 这两个是不同的数据，不应互相覆盖。
+		// 回写策略：只在 FundDetail.LatestNAV 为零（尚未从 Tushare 获取过确认净值）时，
+		// 才用行情估值临时填充；否则保留已确认净值。
+		if a, ok := assetMap[r.AssetID]; ok && a.AssetType == domain.AssetTypeFund {
+			fd, fdErr := s.assetRepo.GetFundDetail(ctx, a.ID)
+			if fdErr != nil {
+				slog.Warn("refresh: get fund detail for nav update failed",
+					slog.Uint64("asset_id", uint64(r.AssetID)),
+					slog.String("err", fdErr.Error()))
+			} else if fd != nil {
+				if fd.LatestNAV.IsZero() {
+					// 尚未获取过确认净值，用行情估值临时填充
+					fd.LatestNAV = r.Price
+					fd.LatestNAVDate = domain.NewNullableDate(&r.QuoteTime)
+				}
+				// 已有确认净值时，不覆盖 LatestNAV；仅更新 LatestNAVDate（如果为空）
+				if fd.LatestNAVDate.Time() == nil {
+					fd.LatestNAVDate = domain.NewNullableDate(&r.QuoteTime)
+				}
+				if err := s.assetRepo.UpsertFundDetail(ctx, fd); err != nil {
+					slog.Warn("refresh: update fund detail nav failed",
+						slog.Uint64("asset_id", uint64(r.AssetID)),
+						slog.String("err", err.Error()))
+				}
+			} else {
+				// FundDetail 不存在，创建一条（用行情估值临时填充）
+				fd = &domain.FundDetail{
+					AssetID:       a.ID,
+					LatestNAV:     r.Price,
+					LatestNAVDate: domain.NewNullableDate(&r.QuoteTime),
+				}
+				if err := s.assetRepo.UpsertFundDetail(ctx, fd); err != nil {
+					slog.Warn("refresh: create fund detail nav failed",
+						slog.Uint64("asset_id", uint64(r.AssetID)),
+						slog.String("err", err.Error()))
+				}
+			}
+		}
+
+		// 对股票资产：回写 StockDetail 最新价格和价格时间
+		if a, ok := assetMap[r.AssetID]; ok && a.AssetType == domain.AssetTypeStock {
+			sd, sdErr := s.assetRepo.GetStockDetail(ctx, a.ID)
+			if sdErr != nil {
+				slog.Warn("refresh: get stock detail for price update failed",
+					slog.Uint64("asset_id", uint64(r.AssetID)),
+					slog.String("err", sdErr.Error()))
+			} else if sd != nil {
+				sd.LatestPrice = r.Price
+				sd.LatestPriceTime = &r.QuoteTime
+				if err := s.assetRepo.UpsertStockDetail(ctx, sd); err != nil {
+					slog.Warn("refresh: update stock detail price failed",
+						slog.Uint64("asset_id", uint64(r.AssetID)),
+						slog.String("err", err.Error()))
+				}
+			} else {
+				// StockDetail 不存在，创建一条
+				sd = &domain.StockDetail{
+					AssetID:         a.ID,
+					LatestPrice:     r.Price,
+					LatestPriceTime: &r.QuoteTime,
+				}
+				if err := s.assetRepo.UpsertStockDetail(ctx, sd); err != nil {
+					slog.Warn("refresh: create stock detail price failed",
+						slog.Uint64("asset_id", uint64(r.AssetID)),
+						slog.String("err", err.Error()))
+				}
+			}
+		}
+
 		rr.OK = true
 		rr.Source = r.Source
 		rr.Price = r.Price.String()

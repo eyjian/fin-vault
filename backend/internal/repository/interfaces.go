@@ -230,4 +230,5 @@ type Repositories struct {
 	Quote          QuoteRepository
 	Rate           RateRepository
 	PulseDiagnosis PulseDiagnosisRepository
+	SysConfig      SysConfigRepository
 }

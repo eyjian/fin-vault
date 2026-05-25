@@ -34,5 +34,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&domain.PulseDiagnosis{},
 		// 报表
 		&domain.Report{},
+		// 系统配置（Tushare Token、DeepSeek API Key 等）
+		&domain.SysConfig{},
 	)
 }

@@ -118,6 +118,7 @@ func (f *tushareFundFetcher) FetchMeta(ctx context.Context, a AssetKey) (*AssetM
 		return nil, ErrUnsupportedAsset
 	}
 	if a.AssetCode == "" {
+		slog.Error("tushare fund meta: empty asset code")
 		return nil, fmt.Errorf("tushare fund meta: empty asset code")
 	}
 
@@ -138,21 +139,26 @@ func (f *tushareFundFetcher) FetchMeta(ctx context.Context, a AssetKey) (*AssetM
 		SetHeader("Content-Type", "application/json").
 		Post(url)
 	if err != nil {
+		slog.Error("tushare fund nav http error", slog.String("code", a.AssetCode), slog.String("err", err.Error()))
 		return nil, fmt.Errorf("tushare fund nav http: %w", err)
 	}
 	if resp.StatusCode() != 200 {
+		slog.Error("tushare fund nav non-200", slog.String("code", a.AssetCode), slog.Int("status", resp.StatusCode()), slog.String("body", truncate(resp.String(), 200)))
 		return nil, fmt.Errorf("tushare fund nav non-200: status=%d, body=%s",
 			resp.StatusCode(), truncate(resp.String(), 200))
 	}
 
 	var tResp tushareAPIResponse
 	if err := json.Unmarshal(resp.Body(), &tResp); err != nil {
+		slog.Error("tushare fund nav json decode error", slog.String("code", a.AssetCode), slog.String("err", err.Error()))
 		return nil, fmt.Errorf("tushare fund nav json decode: %w", err)
 	}
 	if tResp.Code != 0 {
+		slog.Error("tushare fund nav api error", slog.String("code", a.AssetCode), slog.Int("code", tResp.Code), slog.String("msg", tResp.Message))
 		return nil, fmt.Errorf("tushare fund nav api error: code=%d, msg=%s", tResp.Code, tResp.Message)
 	}
 	if len(tResp.Data.Items) == 0 {
+		slog.Warn("tushare fund nav no data", slog.String("code", a.AssetCode))
 		return nil, ErrNoData
 	}
 
@@ -171,9 +177,11 @@ func (f *tushareFundFetcher) FetchMeta(ctx context.Context, a AssetKey) (*AssetM
 		}
 	}
 	if endDateIdx == -1 || navIdx == -1 {
+		slog.Error("tushare fund nav: missing end_date or nav in fields", slog.String("code", a.AssetCode), slog.Any("fields", fields))
 		return nil, fmt.Errorf("tushare fund nav: missing end_date or nav in fields")
 	}
 	if endDateIdx >= len(latestItem) || navIdx >= len(latestItem) {
+		slog.Error("tushare fund nav: index out of range in items", slog.String("code", a.AssetCode))
 		return nil, fmt.Errorf("tushare fund nav: index out of range in items")
 	}
 
@@ -181,18 +189,21 @@ func (f *tushareFundFetcher) FetchMeta(ctx context.Context, a AssetKey) (*AssetM
 	navStr := strings.TrimSpace(latestItem[navIdx])
 
 	if endDateStr == "" || navStr == "" {
+		slog.Warn("tushare fund nav: empty end_date or nav", slog.String("code", a.AssetCode))
 		return nil, ErrNoData
 	}
 
 	// 解析净值日期：end_date 格式为 YYYYMMDD
 	navDate, err := time.ParseInLocation("20060102", endDateStr, time.Local)
 	if err != nil {
+		slog.Error("tushare fund nav: invalid end_date", slog.String("code", a.AssetCode), slog.String("end_date", endDateStr), slog.String("err", err.Error()))
 		return nil, fmt.Errorf("tushare fund nav: invalid end_date %q: %w", endDateStr, err)
 	}
 
 	// 解析净值
 	nav, err := decimal.NewFromString(navStr)
 	if err != nil {
+		slog.Error("tushare fund nav: invalid nav", slog.String("code", a.AssetCode), slog.String("nav", navStr), slog.String("err", err.Error()))
 		return nil, fmt.Errorf("tushare fund nav: invalid nav %q: %w", navStr, err)
 	}
 
