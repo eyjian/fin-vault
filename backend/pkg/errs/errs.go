@@ -68,14 +68,14 @@ func As(err error) *Error {
 
 var (
 	ErrSuccess        = New(0, "success")
-	ErrInvalidParam   = New(10001, "invalid parameter")
-	ErrUnauthorized   = New(10002, "unauthorized")
-	ErrForbidden      = New(10003, "forbidden")
-	ErrNotFound       = New(10004, "resource not found")
-	ErrConflict       = New(10005, "resource conflict")
-	ErrTooManyRequest = New(10006, "too many requests")
-	ErrInternal       = New(10007, "internal server error")
-	ErrTimeout        = New(10008, "operation timeout")
+	ErrInvalidParam   = New(10001, "参数不合法")
+	ErrUnauthorized   = New(10002, "未登录或登录已失效")
+	ErrForbidden      = New(10003, "没有访问权限")
+	ErrNotFound       = New(10004, "资源不存在")
+	ErrConflict       = New(10005, "资源冲突")
+	ErrTooManyRequest = New(10006, "请求太频繁，请稍后重试")
+	ErrInternal       = New(10007, "服务器内部错误")
+	ErrTimeout        = New(10008, "操作超时")
 )
 
 // =====================================================================
@@ -84,33 +84,33 @@ var (
 
 var (
 	// Asset
-	ErrAssetNotFound      = New(30001, "asset not found")
-	ErrAssetDuplicated    = New(30002, "asset already exists")
-	ErrAssetTypeInvalid   = New(30003, "invalid asset type")
-	ErrAssetCodeInvalid   = New(30004, "invalid asset code format")
-	ErrAssetProbeNotFound = New(30005, "asset probe not found")
-	ErrAssetProbeUpstream = New(30006, "asset probe upstream error")
+	ErrAssetNotFound      = New(30001, "资产不存在")
+	ErrAssetDuplicated    = New(30002, "该资产已存在")
+	ErrAssetTypeInvalid   = New(30003, "资产类型不合法")
+	ErrAssetCodeInvalid   = New(30004, "资产代码格式不合法")
+	ErrAssetProbeNotFound = New(30005, "未查到该资产信息，请核对代码与市场")
+	ErrAssetProbeUpstream = New(30006, "行情源暂不可用，请稍后重试或手动填写")
 
 	// Holding
-	ErrHoldingNotFound   = New(30101, "holding not found")
-	ErrHoldingDuplicated = New(30102, "holding already exists")
-	ErrHoldingClosed     = New(30103, "holding already closed/matured")
+	ErrHoldingNotFound   = New(30101, "持仓不存在")
+	ErrHoldingDuplicated = New(30102, "持仓已存在")
+	ErrHoldingClosed     = New(30103, "持仓已平仓或到期")
 
 	// Transaction
-	ErrTxnNotFound          = New(30201, "transaction not found")
-	ErrTxnTypeInvalid       = New(30202, "invalid txn_type")
-	ErrTxnQuantityInvalid   = New(30203, "quantity must be positive")
-	ErrTxnPriceInvalid      = New(30204, "price must be positive")
-	ErrTxnAmountInvalid     = New(30205, "amount must be positive")
-	ErrInsufficientQuantity = New(30206, "insufficient holding quantity for sell/withdraw")
-	ErrTxnDuplicated        = New(30207, "duplicate transaction (external_id conflict)")
-	ErrCashCodeInvalid      = New(30208, "invalid cash asset_code, must be CASH-{platform}-{currency}")
+	ErrTxnNotFound          = New(30201, "交易流水不存在")
+	ErrTxnTypeInvalid       = New(30202, "交易类型不合法")
+	ErrTxnQuantityInvalid   = New(30203, "数量必须为正数")
+	ErrTxnPriceInvalid      = New(30204, "价格必须为正数")
+	ErrTxnAmountInvalid     = New(30205, "金额必须为正数")
+	ErrInsufficientQuantity = New(30206, "可用持仓不足，无法卖出/赎回")
+	ErrTxnDuplicated        = New(30207, "交易重复（external_id 冲突）")
+	ErrCashCodeInvalid      = New(30208, "现金资产代码不合法，须为 CASH-{platform}-{currency}")
 
 	// Platform / Wealth
-	ErrPlatformNotFound       = New(30301, "platform not found")
-	ErrPlatformCodeDuplicated = New(30302, "platform code already exists")
-	ErrWealthDetailMissing    = New(30401, "wealth detail required for wealth asset")
-	ErrWealthMatured          = New(30402, "wealth product already matured")
+	ErrPlatformNotFound       = New(30301, "平台不存在")
+	ErrPlatformCodeDuplicated = New(30302, "平台代码已存在")
+	ErrWealthDetailMissing    = New(30401, "理财产品必须填写详情")
+	ErrWealthMatured          = New(30402, "理财产品已到期")
 )
 
 // =====================================================================
@@ -118,10 +118,10 @@ var (
 // =====================================================================
 
 var (
-	ErrPriceQuoteNotFound   = New(40001, "price quote not found")
-	ErrExchangeRateNotFound = New(40002, "exchange rate not found")
-	ErrQuoteSourceUnsupport = New(40003, "unsupported quote source")
-	ErrQuoteFetchFailed     = New(40004, "fetch quote failed")
+	ErrPriceQuoteNotFound   = New(40001, "行情不存在")
+	ErrExchangeRateNotFound = New(40002, "汇率不存在")
+	ErrQuoteSourceUnsupport = New(40003, "不支持的行情来源")
+	ErrQuoteFetchFailed     = New(40004, "拉取行情失败")
 )
 
 // =====================================================================
@@ -129,16 +129,16 @@ var (
 // =====================================================================
 
 var (
-	ErrAISessionNotFound     = New(50001, "session not found")
-	ErrAIRequestFailed       = New(50004, "llm request failed")
-	ErrAIToolCallFailed      = New(50005, "llm tool call failed")
-	ErrAIProviderRateLimited = New(50006, "llm provider rate limited")
-	ErrAIToolNotFound        = New(50007, "tool not found")
+	ErrAISessionNotFound     = New(50001, "会话不存在")
+	ErrAIRequestFailed       = New(50004, "AI 请求失败")
+	ErrAIToolCallFailed      = New(50005, "AI 工具调用失败")
+	ErrAIProviderRateLimited = New(50006, "AI 服务提供商限流")
+	ErrAIToolNotFound        = New(50007, "AI 工具不存在")
 
 	// AI 把脉
-	ErrAIPulseUnavailable      = New(50010, "ai pulse diagnosis unavailable")
-	ErrAIPulseDataInsufficient = New(50011, "ai pulse data insufficient")
-	ErrAIPulseParseFailed      = New(50012, "ai pulse llm output parse failed")
+	ErrAIPulseUnavailable      = New(50010, "AI 把脉服务不可用")
+	ErrAIPulseDataInsufficient = New(50011, "AI 把脉数据不足")
+	ErrAIPulseParseFailed      = New(50012, "AI 把脉输出解析失败")
 )
 
 // =====================================================================
@@ -146,8 +146,8 @@ var (
 // =====================================================================
 
 var (
-	ErrDB          = New(90001, "database error")
-	ErrCache       = New(90002, "cache error")
-	ErrConfig      = New(90003, "config error")
-	ErrTransaction = New(90004, "db transaction error")
+	ErrDB          = New(90001, "数据库错误")
+	ErrCache       = New(90002, "缓存错误")
+	ErrConfig      = New(90003, "配置错误")
+	ErrTransaction = New(90004, "数据库事务错误")
 )

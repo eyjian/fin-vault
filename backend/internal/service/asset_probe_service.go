@@ -81,20 +81,20 @@ func (s *AssetProbeService) Probe(ctx context.Context, args ProbeArgs) (*ProbeRe
 	args.Market = strings.ToUpper(strings.TrimSpace(args.Market))
 
 	if args.AssetType != "fund" && args.AssetType != "stock" {
-		return nil, errs.ErrInvalidParam.WithMsg("asset_type must be one of: fund, stock")
+		return nil, errs.ErrInvalidParam.WithMsg("资产类型只能是基金或股票")
 	}
 	if args.AssetCode == "" {
-		return nil, errs.ErrInvalidParam.WithMsg("asset_code required")
+		return nil, errs.ErrInvalidParam.WithMsg("请填写资产代码")
 	}
 	if len(args.AssetCode) > 32 {
-		return nil, errs.ErrInvalidParam.WithMsg("asset_code too long")
+		return nil, errs.ErrInvalidParam.WithMsg("资产代码过长")
 	}
 	if args.AssetType == "stock" && args.Market == "" {
-		return nil, errs.ErrInvalidParam.WithMsg("market required for stock")
+		return nil, errs.ErrInvalidParam.WithMsg("请选择股票市场")
 	}
 
 	if len(s.fetchers) == 0 {
-		return nil, errs.ErrAssetProbeUpstream.WithMsg("asset probe fetcher not configured")
+		return nil, errs.ErrAssetProbeUpstream.WithMsg("行情源未配置")
 	}
 
 	// 用 5s 超时兜底；如果 ctx 已带 deadline 则直接复用，避免双层超时。
@@ -105,10 +105,13 @@ func (s *AssetProbeService) Probe(ctx context.Context, args ProbeArgs) (*ProbeRe
 	}
 
 	// 按优先级逐源尝试，第一个成功即返回；
-	// 记录每个源的失败原因，全部失败时返回最后一个非 ErrNoData 的错误（优先返回网络错误），
-	// 若全部是 ErrNoData 则返回 ErrAssetProbeNotFound。
+	// 全部失败时归一化错误：
+	//   - 只要任何一个源返回 ErrNoData（说明 HTTP 通了但查不到代码）→ NotFound；
+	//   - 否则全部都是网络/解析错误 → Upstream；
+	//   - 全部 Unsupported（极少见）→ InvalidParam。
 	var lastErr error
-	allNoData := true
+	hasNoData := false
+	allUnsupported := true
 	ak := platformapi.AssetKey{
 		AssetType: args.AssetType,
 		AssetCode: args.AssetCode,
@@ -125,8 +128,14 @@ func (s *AssetProbeService) Probe(ctx context.Context, args ProbeArgs) (*ProbeRe
 			}
 			return toProbeResult(meta), nil
 		}
-		if !errors.Is(err, platformapi.ErrNoData) {
-			allNoData = false
+		switch {
+		case errors.Is(err, platformapi.ErrNoData):
+			hasNoData = true
+			allUnsupported = false
+		case errors.Is(err, platformapi.ErrUnsupportedAsset):
+			// 保持 allUnsupported 不变
+		default:
+			allUnsupported = false
 		}
 		lastErr = err
 	}
@@ -136,9 +145,11 @@ func (s *AssetProbeService) Probe(ctx context.Context, args ProbeArgs) (*ProbeRe
 		return nil, errs.ErrAssetProbeNotFound
 	}
 	switch {
-	case errors.Is(lastErr, platformapi.ErrNoData) && allNoData:
+	case hasNoData:
+		// 只要有任何一个源返回"无数据"，优先归类为"未找到"——这通常意味着用户输错了代码或市场，
+		// 比"上游故障"更可能且更友好。
 		return nil, errs.ErrAssetProbeNotFound.WithCause(lastErr)
-	case errors.Is(lastErr, platformapi.ErrUnsupportedAsset):
+	case allUnsupported:
 		return nil, errs.ErrInvalidParam.WithCause(lastErr)
 	default:
 		return nil, errs.ErrAssetProbeUpstream.WithCause(lastErr)

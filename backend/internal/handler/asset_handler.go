@@ -174,7 +174,7 @@ func (h *AssetHandler) delete(c *gin.Context) {
 // 但仍要求经过 middleware.Auth（防止匿名滥用外部 API）。
 func (h *AssetHandler) probe(c *gin.Context) {
 	if h.probeSvc == nil {
-		response.Fail(c, errs.ErrAssetProbeUpstream.WithMsg("asset probe not available"))
+		response.Fail(c, errs.ErrAssetProbeUpstream.WithMsg("行情服务未启用"))
 		return
 	}
 	args := service.ProbeArgs{

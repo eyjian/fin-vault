@@ -211,7 +211,8 @@ func TestAssetProbeService_Fallback_SecondSourceSucceeds(t *testing.T) {
 }
 
 func TestAssetProbeService_Fallback_AllSourcesFail(t *testing.T) {
-	// 两个源都失败，应返回 upstream error（网络错误优先于 NoData）
+	// 主源是网络错误，备用源能联通但返回 ErrNoData。
+	// 新语义：只要有源明确告诉我们"查不到"，就归类为 NotFound（用户输错代码的概率更高）。
 	primary := &mockMetaFetcher{
 		source:   "api_eastmoney",
 		supports: func(a platformapi.AssetKey) bool { return true },
@@ -232,8 +233,32 @@ func TestAssetProbeService_Fallback_AllSourcesFail(t *testing.T) {
 	require.Error(t, err)
 	be := errs.As(err)
 	require.NotNil(t, be)
-	// 网络错误优先级高于 NoData，但 lastErr 是最后一个错误(NoData)，
-	// 而 allNoData=false（因为 primary 返回的不是 ErrNoData），走 default 分支 → ErrAssetProbeUpstream
+	// 至少有一个源返回 ErrNoData → 归类为 NotFound（更友好的语义）
+	assert.Equal(t, errs.ErrAssetProbeNotFound.Code, be.Code)
+}
+
+func TestAssetProbeService_Fallback_AllNetworkErrors_ReturnsUpstream(t *testing.T) {
+	// 所有源都是网络错误（没有任何源给出明确的"查不到"信号）→ 归类为 Upstream。
+	primary := &mockMetaFetcher{
+		source:   "api_eastmoney",
+		supports: func(a platformapi.AssetKey) bool { return true },
+		fetch: func(ctx context.Context, a platformapi.AssetKey) (*platformapi.AssetMeta, error) {
+			return nil, errors.New("connection refused")
+		},
+	}
+	fallback := &mockMetaFetcher{
+		source:   "api_sina",
+		supports: func(a platformapi.AssetKey) bool { return true },
+		fetch: func(ctx context.Context, a platformapi.AssetKey) (*platformapi.AssetMeta, error) {
+			return nil, errors.New("dial timeout")
+		},
+	}
+	svc := NewAssetProbeService(primary, fallback)
+
+	_, err := svc.Probe(context.Background(), ProbeArgs{AssetType: "stock", AssetCode: "99999", Market: "SH"})
+	require.Error(t, err)
+	be := errs.As(err)
+	require.NotNil(t, be)
 	assert.Equal(t, errs.ErrAssetProbeUpstream.Code, be.Code)
 }
 
