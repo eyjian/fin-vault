@@ -75,6 +75,8 @@ type AssetMeta struct {
 	FundType  string          // equity / bond / hybrid / money / index / qdii
 	LatestNAV decimal.Decimal // 最新单位净值
 	NAVDate   time.Time       // 净值日期
+	Benchmark string          // 业绩基准（如 "沪深300指数收益率×80%+中债综合指数收益率×20%"）
+	RiskLevel string          // 风险等级（"低" / "中低" / "中" / "中高" / "高"），由实现自行映射
 
 	// 股票专属
 	Market      string          // 推断后的市场：SH / SZ / BJ（HK/US 不做推断）
@@ -101,22 +103,36 @@ type AssetMetaFetcher interface {
 	FetchMeta(ctx context.Context, a AssetKey) (*AssetMeta, error)
 }
 
-// StockMetaEnricher 股票元信息"补全器"。
+// MetaEnricher 资产元信息"补全器"。
 //
 // 与 AssetMetaFetcher 的差别：
 //   - AssetMetaFetcher 是主源，独立返回完整 *AssetMeta；
-//   - StockMetaEnricher 不能独立产出 meta，仅在主源已成功返回 meta 后，
-//     按"仅补空、不覆盖"策略填充缺失字段（如行业/板块/上市日）。
+//   - MetaEnricher 不能独立产出 meta，仅在主源已成功返回 meta 后，
+//     按"仅补空、不覆盖"策略填充缺失字段。
 //
-// 典型用例：东方财富 push2 行情快照接口对绝大多数 A 股不返回 f127/f128/f189，
-// 而 datacenter F10 BASIC_ORGINFO 有这些字段——把它做成 enricher 后，
-// 无论主源是 push2、新浪还是其它，A 股都能享受 F10 补全。
+// 典型用例：
+//   - 股票场景：东方财富 push2 行情快照接口对绝大多数 A 股不返回 f127/f128/f189，
+//     用 datacenter F10 BASIC_ORGINFO 补行业/板块/上市日；
+//   - 基金场景：fund.eastmoney.com 的 pingzhongdata 接口经常拿不到基金公司/业绩基准/
+//     风险等级，用 api.fund.eastmoney.com 的 JJJBQK 接口补。
+//
+// 把这些做成 enricher 而非塞进主 fetcher，主要好处：
+//   - 主源（含 push2 / pingzhongdata）失败被反爬封 IP 时，service 会降级到备用源（新浪等），
+//     enricher 走的是不同域名/端点，不会同时挂掉，让降级路径也能享受字段补全；
+//   - 单一职责：fetcher 负责"拉主数据"，enricher 负责"补字段"，互不干扰；
+//   - 易扩展：未来可以再加 enricher 不影响主链路。
 //
 // 实现要求：
 //   - Enrich 必须 graceful degrade：网络/解析失败不返回 error，仅静默跳过；
 //   - 仅在 meta 中目标字段为空时填充，已有值不覆盖；
-//   - 实现内部应自带超时控制，避免拖慢主路径。
-type StockMetaEnricher interface {
+//   - 实现内部应自带超时控制，避免拖慢主路径；
+//   - 实现可按 a.AssetType 自行判断是否处理（不处理时直接 return nil）。
+type MetaEnricher interface {
 	// Enrich 按需补全 meta 中的字段。返回 error 仅用于诊断日志，调用方会忽略。
 	Enrich(ctx context.Context, a AssetKey, meta *AssetMeta) error
 }
+
+// StockMetaEnricher 是 MetaEnricher 的别名，保留以维持二进制 / 调用方兼容。
+//
+// Deprecated: 使用 MetaEnricher。基金类的 enricher 共享同一接口契约。
+type StockMetaEnricher = MetaEnricher

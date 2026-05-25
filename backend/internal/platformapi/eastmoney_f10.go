@@ -39,7 +39,7 @@ type eastmoneyF10Enricher struct {
 }
 
 // NewEastmoneyF10Enricher 构造 F10 补全器。timeout<=0 时默认 5s。
-func NewEastmoneyF10Enricher(timeout time.Duration, opts ...FetcherOption) StockMetaEnricher {
+func NewEastmoneyF10Enricher(timeout time.Duration, opts ...FetcherOption) MetaEnricher {
 	cfg := defaultConfig(timeout)
 	for _, opt := range opts {
 		opt(cfg)

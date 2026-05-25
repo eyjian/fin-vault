@@ -75,6 +75,8 @@ type ProbeResult struct {
 	FundType    string `json:"fund_type,omitempty"`
 	LatestNAV   string `json:"latest_nav,omitempty"`
 	NAVDate     string `json:"nav_date,omitempty"`
+	Benchmark   string `json:"benchmark,omitempty"`
+	RiskLevel   string `json:"risk_level,omitempty"`
 	Market      string `json:"market,omitempty"`
 	Industry    string `json:"industry,omitempty"`
 	Sector      string `json:"sector,omitempty"`
@@ -159,6 +161,23 @@ func (s *AssetProbeService) Probe(ctx context.Context, args ProbeArgs) (*ProbeRe
 		lastErr = err
 	}
 
+	// 全部源都失败了，但 enricher 可能仍能独立产出数据（典型场景：东方财富 push2 / pingzhongdata
+	// 被反爬封 IP，但 datacenter / api.fund.eastmoney.com 仍可访问）。
+	// 兜底降级：构造空 meta 交给 enricher 试试看；如果至少补出了 Name（基金/股票名），
+	// 就认为探测成功；否则按原来归一化错误。
+	if len(s.enrichers) > 0 {
+		fallbackMeta := &platformapi.AssetMeta{
+			Source: "enricher_only",
+			Market: args.Market,
+		}
+		for _, enricher := range s.enrichers {
+			_ = enricher.Enrich(ctx, ak, fallbackMeta)
+		}
+		if fallbackMeta.Name != "" {
+			return toProbeResult(fallbackMeta), nil
+		}
+	}
+
 	// 全部源都失败了，归一化错误
 	if lastErr == nil {
 		return nil, errs.ErrAssetProbeNotFound
@@ -178,14 +197,16 @@ func (s *AssetProbeService) Probe(ctx context.Context, args ProbeArgs) (*ProbeRe
 // toProbeResult 把 platformapi.AssetMeta 转换为对外的 ProbeResult。
 func toProbeResult(m *platformapi.AssetMeta) *ProbeResult {
 	r := &ProbeResult{
-		Name:     m.Name,
-		Source:   m.Source,
-		Company:  m.Company,
-		Manager:  m.Manager,
-		FundType: m.FundType,
-		Market:   m.Market,
-		Industry: m.Industry,
-		Sector:   m.Sector,
+		Name:      m.Name,
+		Source:    m.Source,
+		Company:   m.Company,
+		Manager:   m.Manager,
+		FundType:  m.FundType,
+		Benchmark: m.Benchmark,
+		RiskLevel: m.RiskLevel,
+		Market:    m.Market,
+		Industry:  m.Industry,
+		Sector:    m.Sector,
 	}
 	if !m.LatestNAV.IsZero() {
 		r.LatestNAV = m.LatestNAV.String()

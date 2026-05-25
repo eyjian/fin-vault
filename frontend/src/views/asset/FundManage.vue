@@ -191,6 +191,8 @@ async function onProbeFund() {
     fd.fund_type = fillStr(fd.fund_type, r.fund_type)
     fd.latest_nav = fillStr(fd.latest_nav as string | undefined, r.latest_nav)
     fd.latest_nav_date = fillStr(fd.latest_nav_date, r.nav_date)
+    fd.benchmark = fillStr(fd.benchmark, r.benchmark)
+    form.value.risk_level = fillStr(form.value.risk_level ?? undefined, r.risk_level) ?? form.value.risk_level
     if (filled > 0) {
       ElMessage.success(`已自动填充 ${filled} 个字段`)
     } else {

@@ -114,12 +114,16 @@ func Wire(cfg *Config) (*App, error) {
 	// 即便 push2.eastmoney.com 被反爬封 IP（此时主源会降级到新浪），
 	// datacenter.eastmoney.com 仍可访问，让降级路径也能享受 F10 补全。
 	f10Enricher := platformapi.NewEastmoneyF10Enricher(httpTimeout)
+	// 基金详情 enricher：基金公司/类型/业绩基准/风险等级/最新净值补全。同理与
+	// pingzhongdata 解耦，走 api.fund.eastmoney.com 的 JJJBQK 接口，对部分新基金
+	// 或 pingzhongdata 字段不全的情况是必要的补充源。
+	fundDetailEnricher := platformapi.NewEastmoneyFundDetailEnricher(httpTimeout)
 
 	// 7. Services
 	holdingSvc := service.NewHoldingService(repos.Holding, repos.Asset, repos.Quote, repos.Rate, repos.Platform)
 	assetSvc := service.NewAssetService(repos.UoW, repos.Asset, repos.Platform, holdingSvc)
 	assetProbeSvc := service.NewAssetProbeService(metaFetcher, sinaMetaFetcher).
-		WithEnrichers(f10Enricher)
+		WithEnrichers(f10Enricher, fundDetailEnricher)
 	txnSvc := service.NewTransactionService(repos.UoW, repos.Transaction, repos.Holding, repos.Asset)
 	quoteSvc := service.NewQuoteService(repos.Quote, repos.Asset, cacheProv, aggregator, cfg.Quote.CacheTTL)
 	rateSvc := service.NewRateService(repos.Rate)

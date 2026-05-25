@@ -298,6 +298,8 @@ export interface AssetProbeResult {
   fund_type?: string
   latest_nav?: string
   nav_date?: string
+  benchmark?: string
+  risk_level?: string
   // stock-only
   market?: 'SH' | 'SZ' | 'HK' | 'US' | 'BJ'
   industry?: string
