@@ -110,11 +110,16 @@ func Wire(cfg *Config) (*App, error) {
 	// 失败语义：fetcher 永远可构造（resty 客户端 + 默认 baseURL），不会返回 nil。
 	metaFetcher := platformapi.NewEastmoneyMetaFetcher(httpTimeout)
 	sinaMetaFetcher := platformapi.NewSinaMetaFetcher(httpTimeout)
+	// F10 enricher：A 股行业/板块/上市日补全。独立于主 fetcher 链路——
+	// 即便 push2.eastmoney.com 被反爬封 IP（此时主源会降级到新浪），
+	// datacenter.eastmoney.com 仍可访问，让降级路径也能享受 F10 补全。
+	f10Enricher := platformapi.NewEastmoneyF10Enricher(httpTimeout)
 
 	// 7. Services
 	holdingSvc := service.NewHoldingService(repos.Holding, repos.Asset, repos.Quote, repos.Rate, repos.Platform)
 	assetSvc := service.NewAssetService(repos.UoW, repos.Asset, repos.Platform, holdingSvc)
-	assetProbeSvc := service.NewAssetProbeService(metaFetcher, sinaMetaFetcher)
+	assetProbeSvc := service.NewAssetProbeService(metaFetcher, sinaMetaFetcher).
+		WithEnrichers(f10Enricher)
 	txnSvc := service.NewTransactionService(repos.UoW, repos.Transaction, repos.Holding, repos.Asset)
 	quoteSvc := service.NewQuoteService(repos.Quote, repos.Asset, cacheProv, aggregator, cfg.Quote.CacheTTL)
 	rateSvc := service.NewRateService(repos.Rate)

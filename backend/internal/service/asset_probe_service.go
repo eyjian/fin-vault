@@ -24,7 +24,8 @@ import (
 
 // AssetProbeService 资产元信息探测服务。
 type AssetProbeService struct {
-	fetchers []platformapi.AssetMetaFetcher // 按优先级排列，第一个为主源，后续为备用源
+	fetchers  []platformapi.AssetMetaFetcher  // 按优先级排列，第一个为主源，后续为备用源
+	enrichers []platformapi.StockMetaEnricher // 主源获取成功后，逐个调用 enricher 补全缺失字段（只补空、不覆盖）
 }
 
 // NewAssetProbeService 构造服务。
@@ -32,7 +33,7 @@ type AssetProbeService struct {
 // fetchers 按优先级顺序传入，主源在前、备用源在后；
 // 探测时按顺序尝试，第一个成功即返回；全部失败则返回最后一个错误。
 // 传空或全部 nil 时，所有 Probe 请求会返回 ErrAssetProbeUpstream，
-// 与 QuoteAggregator 在 LLM/行情未配置时的"降级失败"语义一致。
+// 与 QuoteAggregator 在 LLM/行情未配置时的“降级失败”语义一致。
 func NewAssetProbeService(fetchers ...platformapi.AssetMetaFetcher) *AssetProbeService {
 	valid := make([]platformapi.AssetMetaFetcher, 0, len(fetchers))
 	for _, f := range fetchers {
@@ -41,6 +42,19 @@ func NewAssetProbeService(fetchers ...platformapi.AssetMetaFetcher) *AssetProbeS
 		}
 	}
 	return &AssetProbeService{fetchers: valid}
+}
+
+// WithEnrichers 设置一或多个 StockMetaEnricher。
+//
+// enricher 不能独立产出 meta，仅在主源返回成功后被调用，按”仅补空、不覆盖“策略填充缺失字段。
+// 返回同一 service 实例，便于链式调用。允许传入 nil，会被过滤掉。
+func (s *AssetProbeService) WithEnrichers(enrichers ...platformapi.StockMetaEnricher) *AssetProbeService {
+	for _, e := range enrichers {
+		if e != nil {
+			s.enrichers = append(s.enrichers, e)
+		}
+	}
+	return s
 }
 
 // ProbeArgs 入参。
@@ -125,6 +139,11 @@ func (s *AssetProbeService) Probe(ctx context.Context, args ProbeArgs) (*ProbeRe
 		if err == nil {
 			if meta == nil {
 				continue
+			}
+			// 主源拿到 meta，调用 enricher 按需补全（仅补空、不覆盖）。
+			// 各 enricher 内部已保证 graceful degrade，失败不会返回错误，不会拖垄主路径。
+			for _, enricher := range s.enrichers {
+				_ = enricher.Enrich(ctx, ak, meta)
 			}
 			return toProbeResult(meta), nil
 		}

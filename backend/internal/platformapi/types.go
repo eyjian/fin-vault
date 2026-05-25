@@ -100,3 +100,23 @@ type AssetMetaFetcher interface {
 	// 远端无数据返回 ErrNoData；不支持的 AssetType/Market 返回 ErrUnsupportedAsset。
 	FetchMeta(ctx context.Context, a AssetKey) (*AssetMeta, error)
 }
+
+// StockMetaEnricher 股票元信息"补全器"。
+//
+// 与 AssetMetaFetcher 的差别：
+//   - AssetMetaFetcher 是主源，独立返回完整 *AssetMeta；
+//   - StockMetaEnricher 不能独立产出 meta，仅在主源已成功返回 meta 后，
+//     按"仅补空、不覆盖"策略填充缺失字段（如行业/板块/上市日）。
+//
+// 典型用例：东方财富 push2 行情快照接口对绝大多数 A 股不返回 f127/f128/f189，
+// 而 datacenter F10 BASIC_ORGINFO 有这些字段——把它做成 enricher 后，
+// 无论主源是 push2、新浪还是其它，A 股都能享受 F10 补全。
+//
+// 实现要求：
+//   - Enrich 必须 graceful degrade：网络/解析失败不返回 error，仅静默跳过；
+//   - 仅在 meta 中目标字段为空时填充，已有值不覆盖；
+//   - 实现内部应自带超时控制，避免拖慢主路径。
+type StockMetaEnricher interface {
+	// Enrich 按需补全 meta 中的字段。返回 error 仅用于诊断日志，调用方会忽略。
+	Enrich(ctx context.Context, a AssetKey, meta *AssetMeta) error
+}

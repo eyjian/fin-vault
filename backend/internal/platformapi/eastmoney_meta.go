@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -40,7 +39,6 @@ type eastmoneyMetaFetcher struct {
 	client            *resty.Client
 	fundDetailBaseURL string
 	stockBaseURL      string
-	stockF10BaseURL   string
 }
 
 // NewEastmoneyMetaFetcher 构造资产元信息 Fetcher。
@@ -61,7 +59,6 @@ func NewEastmoneyMetaFetcher(timeout time.Duration, opts ...FetcherOption) Asset
 		client:            c,
 		fundDetailBaseURL: cfg.fundDetailBaseURL,
 		stockBaseURL:      cfg.stockBaseURL,
-		stockF10BaseURL:   cfg.stockF10BaseURL,
 	}
 }
 
@@ -252,93 +249,11 @@ func (f *eastmoneyMetaFetcher) fetchStockMeta(ctx context.Context, a AssetKey) (
 		}
 	}
 
-	// push2 接口对 A 股的 f127/f128/f189 实际返回常为空（接口定位是行情快照、非基本面）。
-	// 这里在 A 股缺失任一字段时调用 datacenter F10 接口补充，仅补空、不覆盖。
-	// F10调用失败不影响主路径，以保证名称/价格、获取体验不受影响。
-	if isAShareMarket(market) && (meta.Industry == "" || meta.Sector == "" || meta.ListingDate.IsZero()) {
-		f.enrichStockMetaFromF10(ctx, a.AssetCode, market, meta)
-	}
+	// 注：push2 接口对 A 股的 f127/f128/f189 实际返回常为空（接口定位是行情快照、非基本面）。
+	// 行业/板块/上市日的补全已拆出为独立的 eastmoneyF10Enricher（见 eastmoney_f10.go），
+	// 由 service.AssetProbeService 在获取主数据后调用，以便在 push2 被反爬封 IP、
+	// 主源降级到新浪的场景下，降级路径也能享受到 F10 补全。
 	return meta, nil
-}
-
-// enrichStockMetaFromF10 调用东方财富 datacenter F10 基本资料接口，补充行业/板块/上市日。
-//
-// 接口示例：
-//
-//	https://datacenter.eastmoney.com/securities/api/data/v1/get
-//	  ?reportName=RPT_F10_BASIC_ORGINFO
-//	  &columns=SECUCODE,SECURITY_CODE,SECURITY_NAME_ABBR,INDUSTRYCSRC1,EM2016,LISTING_DATE
-//	  &filter=(SECUCODE="002190.SZ")
-//	  &pageNumber=1&pageSize=1
-//
-// 返回表现为标准 JSON：{"result":{"data":[{"INDUSTRYCSRC1":"车辆装备","EM2016":"汽车零部件","LISTING_DATE":"2009-08-18 00:00:00"}]}}。
-//
-// 该函数仅“补空”：然后代码中已有值的字段不会被覆盖。所有异常（网络、解析、字段缺失）
-// 均 graceful degrade：记录事后不招起件、不使主路径失败。
-func (f *eastmoneyMetaFetcher) enrichStockMetaFromF10(ctx context.Context, code, market string, meta *AssetMeta) {
-	secucode := code + "." + market // 如 002190.SZ
-	url := fmt.Sprintf("%s/securities/api/data/v1/get"+
-		"?reportName=RPT_F10_BASIC_ORGINFO"+
-		"&columns=SECUCODE,SECURITY_CODE,SECURITY_NAME_ABBR,INDUSTRYCSRC1,EM2016,LISTING_DATE"+
-		`&filter=(SECUCODE=%%22%s%%22)`+
-		"&pageNumber=1&pageSize=1", f.stockF10BaseURL, secucode)
-
-	slog.Debug("eastmoney F10 request", slog.String("secucode", secucode), slog.String("url", url))
-
-	resp, err := f.client.R().SetContext(ctx).Get(url)
-	if err != nil {
-		slog.Warn("eastmoney F10 http error", slog.String("secucode", secucode), slog.String("err", err.Error()))
-		return
-	}
-	if resp.StatusCode() != 200 {
-		slog.Warn("eastmoney F10 non-200",
-			slog.String("secucode", secucode),
-			slog.Int("status", resp.StatusCode()),
-			slog.String("body_preview", truncate(resp.String(), 200)))
-		return
-	}
-	body := resp.String()
-	if body == "" || !strings.Contains(body, `"data"`) {
-		slog.Warn("eastmoney F10 empty/no-data",
-			slog.String("secucode", secucode),
-			slog.String("body_preview", truncate(body, 200)))
-		return
-	}
-
-	industryBefore := meta.Industry
-	sectorBefore := meta.Sector
-	listingBefore := meta.ListingDate
-
-	if meta.Industry == "" {
-		if v := extractJSONString(body, "INDUSTRYCSRC1"); v != "" {
-			meta.Industry = ensureUTF8(v)
-		}
-	}
-	if meta.Sector == "" {
-		if v := extractJSONString(body, "EM2016"); v != "" {
-			meta.Sector = ensureUTF8(v)
-		}
-	}
-	if meta.ListingDate.IsZero() {
-		if v := extractJSONString(body, "LISTING_DATE"); v != "" {
-			// 样式 "2009-08-18 00:00:00" 或 "2009-08-18"
-			layouts := []string{"2006-01-02 15:04:05", "2006-01-02"}
-			for _, layout := range layouts {
-				if t, err := time.ParseInLocation(layout, v, time.Local); err == nil {
-					meta.ListingDate = t
-					break
-				}
-			}
-		}
-	}
-
-	slog.Info("eastmoney F10 enriched",
-		slog.String("secucode", secucode),
-		slog.String("industry_before", industryBefore),
-		slog.String("industry_after", meta.Industry),
-		slog.String("sector_before", sectorBefore),
-		slog.String("sector_after", meta.Sector),
-		slog.Bool("listing_filled", listingBefore.IsZero() && !meta.ListingDate.IsZero()))
 }
 
 // inferStockMarket 按 A 股代码前缀推断市场。
