@@ -61,9 +61,9 @@ onMounted(async () => {
           <el-option v-for="p in platformStore.platforms" :key="p.id" :value="p.id" :label="p.name" />
         </el-select>
         <el-select v-model="filter.status" placeholder="状态" clearable style="width: 120px;" @change="fetchList">
-          <el-option label="持仓中" value="holding" />
-          <el-option label="已清仓" value="closed" />
-          <el-option label="到期" value="matured" />
+          <el-option label="持仓中" value="持有中" />
+          <el-option label="已清仓" value="已关闭" />
+          <el-option label="到期" value="已到期" />
         </el-select>
         <el-radio-group v-model="filter.display_currency" @change="fetchList">
           <el-radio-button value="CNY">CNY</el-radio-button>

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // 交易流水列表（13 种类型筛选 + 录入 + 删除）
 
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Plus, Delete } from '@element-plus/icons-vue'
 import { txnApi } from '@/api/transaction'
@@ -9,6 +10,8 @@ import { usePlatformStore } from '@/stores/platform'
 import type { Transaction, TxnType } from '@/api/types'
 import TxnDialog from '@/components/TxnDialog.vue'
 import { fmtMoney } from '@/utils/decimal'
+
+const route = useRoute()
 
 const platformStore = usePlatformStore()
 
@@ -80,9 +83,27 @@ const txnTypeOptions: { value: TxnType; label: string }[] = [
 
 const txnTypeMap = Object.fromEntries(txnTypeOptions.map((o) => [o.value, o.label]))
 
+function initAssetIdFromRoute() {
+  const aid = route.query.asset_id
+  if (aid) {
+    filter.asset_id = Number(aid)
+  }
+}
+
 onMounted(async () => {
   await platformStore.load()
+  initAssetIdFromRoute()
   await fetchList()
+})
+
+watch(() => route.query.asset_id, (val) => {
+  if (val) {
+    filter.asset_id = Number(val)
+  } else {
+    filter.asset_id = undefined
+  }
+  filter.page = 1
+  fetchList()
 })
 </script>
 
@@ -114,7 +135,16 @@ onMounted(async () => {
             <el-tag size="small">{{ txnTypeMap[row.txn_type] || row.txn_type }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="asset_id" label="资产ID" width="80" align="right" />
+        <el-table-column label="资产代码" width="120">
+          <template #default="{ row }">
+            {{ row.asset?.asset_code || row.asset_id }}
+          </template>
+        </el-table-column>
+        <el-table-column label="资产名称" min-width="140" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ row.asset?.name || '-' }}
+          </template>
+        </el-table-column>
         <el-table-column label="平台" width="140">
           <template #default="{ row }">{{ platformStore.nameOf(row.platform_id) }}</template>
         </el-table-column>

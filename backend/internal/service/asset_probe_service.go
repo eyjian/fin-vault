@@ -1,0 +1,224 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/eyjian/fin-vault/backend/internal/platformapi"
+	"github.com/eyjian/fin-vault/backend/pkg/errs"
+)
+
+// =====================================================================
+// AssetProbeService —— 资产录入"按代码自动填充"
+// =====================================================================
+//
+// 与 QuoteService 的差别：
+//   - QuoteService 关注价格刷新，依赖 QuoteAggregator（多源 + 协程池）；
+//   - AssetProbeService 关注用户录入资产时一次性回填可公开获取的元信息，
+//     支持多源降级（默认主源东方财富，备用源新浪），低频调用。
+//
+// service 不直接返回 *platformapi.AssetMeta，而是封装为 ProbeResult，
+// 把 decimal/time 等内部类型按"零值省略"原则转成 string，方便 handler 直接写 JSON。
+
+// AssetProbeService 资产元信息探测服务。
+type AssetProbeService struct {
+	fetchers  []platformapi.AssetMetaFetcher  // 按优先级排列，第一个为主源，后续为备用源
+	enrichers []platformapi.StockMetaEnricher // 主源获取成功后，逐个调用 enricher 补全缺失字段（只补空、不覆盖）
+}
+
+// NewAssetProbeService 构造服务。
+//
+// fetchers 按优先级顺序传入，主源在前、备用源在后；
+// 探测时按顺序尝试，第一个成功即返回；全部失败则返回最后一个错误。
+// 传空或全部 nil 时，所有 Probe 请求会返回 ErrAssetProbeUpstream，
+// 与 QuoteAggregator 在 LLM/行情未配置时的“降级失败”语义一致。
+func NewAssetProbeService(fetchers ...platformapi.AssetMetaFetcher) *AssetProbeService {
+	valid := make([]platformapi.AssetMetaFetcher, 0, len(fetchers))
+	for _, f := range fetchers {
+		if f != nil {
+			valid = append(valid, f)
+		}
+	}
+	return &AssetProbeService{fetchers: valid}
+}
+
+// WithEnrichers 设置一或多个 StockMetaEnricher。
+//
+// enricher 不能独立产出 meta，仅在主源返回成功后被调用，按”仅补空、不覆盖“策略填充缺失字段。
+// 返回同一 service 实例，便于链式调用。允许传入 nil，会被过滤掉。
+func (s *AssetProbeService) WithEnrichers(enrichers ...platformapi.StockMetaEnricher) *AssetProbeService {
+	for _, e := range enrichers {
+		if e != nil {
+			s.enrichers = append(s.enrichers, e)
+		}
+	}
+	return s
+}
+
+// ProbeArgs 入参。
+type ProbeArgs struct {
+	AssetType string // fund / stock（必填）
+	AssetCode string // 必填
+	Market    string // stock 必填，fund 忽略
+}
+
+// ProbeResult 出参。decimal/time 按 string 序列化（与 quote_service 风格一致）。
+//
+// 所有字段均 omitempty——零值不下发，方便前端"仅填空"逻辑直接判定。
+type ProbeResult struct {
+	Name        string `json:"name,omitempty"`
+	Source      string `json:"source"`
+	Company     string `json:"company,omitempty"`
+	Manager     string `json:"manager,omitempty"`
+	FundType    string `json:"fund_type,omitempty"`
+	LatestNAV   string `json:"latest_nav,omitempty"`
+	NAVDate     string `json:"nav_date,omitempty"`
+	Benchmark   string `json:"benchmark,omitempty"`
+	RiskLevel   string `json:"risk_level,omitempty"`
+	Market      string `json:"market,omitempty"`
+	Industry    string `json:"industry,omitempty"`
+	Sector      string `json:"sector,omitempty"`
+	ListingDate string `json:"listing_date,omitempty"`
+	LatestPrice string `json:"latest_price,omitempty"`
+}
+
+// Probe 按 args 探测资产元信息。
+//
+// 错误归一化：
+//   - 入参非法 → errs.ErrInvalidParam
+//   - fetcher 未配置 / 远端 HTTP 错 → errs.ErrAssetProbeUpstream
+//   - 远端无数据（platformapi.ErrNoData）→ errs.ErrAssetProbeNotFound
+//   - 不支持的资产类型（platformapi.ErrUnsupportedAsset）→ errs.ErrInvalidParam
+func (s *AssetProbeService) Probe(ctx context.Context, args ProbeArgs) (*ProbeResult, error) {
+	args.AssetType = strings.ToLower(strings.TrimSpace(args.AssetType))
+	args.AssetCode = strings.TrimSpace(args.AssetCode)
+	args.Market = strings.ToUpper(strings.TrimSpace(args.Market))
+
+	if args.AssetType != "fund" && args.AssetType != "stock" {
+		return nil, errs.ErrInvalidParam.WithMsg("资产类型只能是基金或股票")
+	}
+	if args.AssetCode == "" {
+		return nil, errs.ErrInvalidParam.WithMsg("请填写资产代码")
+	}
+	if len(args.AssetCode) > 32 {
+		return nil, errs.ErrInvalidParam.WithMsg("资产代码过长")
+	}
+	if args.AssetType == "stock" && args.Market == "" {
+		return nil, errs.ErrInvalidParam.WithMsg("请选择股票市场")
+	}
+
+	if len(s.fetchers) == 0 {
+		return nil, errs.ErrAssetProbeUpstream.WithMsg("行情源未配置")
+	}
+
+	// 用 5s 超时兜底；如果 ctx 已带 deadline 则直接复用，避免双层超时。
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+
+	// 按优先级逐源尝试，第一个成功即返回；
+	// 全部失败时归一化错误：
+	//   - 只要任何一个源返回 ErrNoData（说明 HTTP 通了但查不到代码）→ NotFound；
+	//   - 否则全部都是网络/解析错误 → Upstream；
+	//   - 全部 Unsupported（极少见）→ InvalidParam。
+	var lastErr error
+	hasNoData := false
+	allUnsupported := true
+	ak := platformapi.AssetKey{
+		AssetType: args.AssetType,
+		AssetCode: args.AssetCode,
+		Market:    args.Market,
+	}
+	for _, fetcher := range s.fetchers {
+		if !fetcher.Supports(ak) {
+			continue
+		}
+		meta, err := fetcher.FetchMeta(ctx, ak)
+		if err == nil {
+			if meta == nil {
+				continue
+			}
+			// 主源拿到 meta，调用 enricher 按需补全（仅补空、不覆盖）。
+			// 各 enricher 内部已保证 graceful degrade，失败不会返回错误，不会拖垄主路径。
+			for _, enricher := range s.enrichers {
+				_ = enricher.Enrich(ctx, ak, meta)
+			}
+			return toProbeResult(meta), nil
+		}
+		switch {
+		case errors.Is(err, platformapi.ErrNoData):
+			hasNoData = true
+			allUnsupported = false
+		case errors.Is(err, platformapi.ErrUnsupportedAsset):
+			// 保持 allUnsupported 不变
+		default:
+			allUnsupported = false
+		}
+		lastErr = err
+	}
+
+	// 全部源都失败了，但 enricher 可能仍能独立产出数据（典型场景：东方财富 push2 / pingzhongdata
+	// 被反爬封 IP，但 datacenter / api.fund.eastmoney.com 仍可访问）。
+	// 兜底降级：构造空 meta 交给 enricher 试试看；如果至少补出了 Name（基金/股票名），
+	// 就认为探测成功；否则按原来归一化错误。
+	if len(s.enrichers) > 0 {
+		fallbackMeta := &platformapi.AssetMeta{
+			Source: "enricher_only",
+			Market: args.Market,
+		}
+		for _, enricher := range s.enrichers {
+			_ = enricher.Enrich(ctx, ak, fallbackMeta)
+		}
+		if fallbackMeta.Name != "" {
+			return toProbeResult(fallbackMeta), nil
+		}
+	}
+
+	// 全部源都失败了，归一化错误
+	if lastErr == nil {
+		return nil, errs.ErrAssetProbeNotFound
+	}
+	switch {
+	case hasNoData:
+		// 只要有任何一个源返回"无数据"，优先归类为"未找到"——这通常意味着用户输错了代码或市场，
+		// 比"上游故障"更可能且更友好。
+		return nil, errs.ErrAssetProbeNotFound.WithCause(lastErr)
+	case allUnsupported:
+		return nil, errs.ErrInvalidParam.WithCause(lastErr)
+	default:
+		return nil, errs.ErrAssetProbeUpstream.WithCause(lastErr)
+	}
+}
+
+// toProbeResult 把 platformapi.AssetMeta 转换为对外的 ProbeResult。
+func toProbeResult(m *platformapi.AssetMeta) *ProbeResult {
+	r := &ProbeResult{
+		Name:      m.Name,
+		Source:    m.Source,
+		Company:   m.Company,
+		Manager:   m.Manager,
+		FundType:  m.FundType,
+		Benchmark: m.Benchmark,
+		RiskLevel: m.RiskLevel,
+		Market:    m.Market,
+		Industry:  m.Industry,
+		Sector:    m.Sector,
+	}
+	if !m.LatestNAV.IsZero() {
+		r.LatestNAV = m.LatestNAV.String()
+	}
+	if !m.NAVDate.IsZero() {
+		r.NAVDate = m.NAVDate.Format("2006-01-02")
+	}
+	if !m.LatestPrice.IsZero() {
+		r.LatestPrice = m.LatestPrice.String()
+	}
+	if !m.ListingDate.IsZero() {
+		r.ListingDate = m.ListingDate.Format("2006-01-02")
+	}
+	return r
+}

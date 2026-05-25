@@ -16,13 +16,42 @@ const filter = reactive({ page: 1, page_size: 50 })
 async function fetchList() {
   loading.value = true
   try {
-    const r = await assetApi.cash(filter)
+    const r = await assetApi.cash({
+      ...filter,
+      include_holdings: true
+    })
     list.value = r?.items || r?.list || []
   } catch {
     list.value = []
   } finally {
     loading.value = false
   }
+}
+
+// 盈亏格式化辅助函数
+function getPnlColor(val: string | number | null | undefined): string {
+  if (!val) return ''
+  const num = typeof val === 'string' ? parseFloat(val) : val
+  if (isNaN(num)) return ''
+  if (num > 0) return '#67C23A' // 绿色
+  if (num < 0) return '#F56C6C' // 红色
+  return ''
+}
+
+function formatPnl(val: string | number | null | undefined): string {
+  if (!val && val !== 0) return '-'
+  const num = typeof val === 'string' ? parseFloat(val) : val
+  if (isNaN(num)) return '-'
+  const prefix = num > 0 ? '+' : ''
+  return prefix + num.toFixed(2)
+}
+
+function formatPnlRatio(val: string | number | null | undefined): string {
+  if (!val && val !== 0) return '-'
+  const num = typeof val === 'string' ? parseFloat(val) : val
+  if (isNaN(num)) return '-'
+  const prefix = num > 0 ? '+' : ''
+  return prefix + (num * 100).toFixed(2) + '%'
 }
 
 const formVisible = ref(false)
@@ -33,7 +62,7 @@ function emptyForm(): Asset {
     name: '',
     asset_type: 'cash',
     currency: 'CNY',
-    status: 'active',
+    status: '活跃',
     issuer_platform_id: undefined
   }
 }
@@ -98,13 +127,30 @@ onMounted(async () => {
       <el-table :data="list" v-loading="loading" stripe border :max-height="540">
         <el-table-column prop="asset_code" label="编码" width="220" />
         <el-table-column prop="name" label="名称" />
+        <el-table-column label="持有金额" width="120" align="right">
+          <template #default="{ row }">{{ row.holding_summary?.quantity || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="收益率" width="100" align="right">
+          <template #default="{ row }">
+            <span :style="{ color: getPnlColor(row.holding_summary?.pnl_ratio) }">
+              {{ formatPnlRatio(row.holding_summary?.pnl_ratio) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="总收益" width="120" align="right">
+          <template #default="{ row }">
+            <span :style="{ color: getPnlColor(row.holding_summary?.total_pnl) }">
+              {{ formatPnl(row.holding_summary?.total_pnl) }}
+            </span>
+          </template>
+        </el-table-column>
         <el-table-column label="平台" width="180">
           <template #default="{ row }">{{ platformStore.nameOf(row.issuer_platform_id) || '-' }}</template>
         </el-table-column>
         <el-table-column prop="currency" label="币种" width="80" />
         <el-table-column label="状态" width="80">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.status === 'active' ? 'success' : 'info'">{{ row.status }}</el-tag>
+            <el-tag size="small" :type="row.status === '活跃' ? 'success' : 'info'">{{ row.status }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="220" fixed="right">

@@ -1,883 +1,783 @@
-# FinVault HTTP API 接口契约（M1）
-# 版本: v1.0-impl
-# 出品: 架构师 陈架构
-# 日期: 2026-05-16
-#
-# 约定：
-# - Base URL: http://localhost:8080
-# - 路径前缀: /api/v1
-# - 认证：第一阶段单用户，Header `X-User-Id` 默认 1（无则 bootstrap 注入）
-# - 统一响应：{ code: 0|>0, message: "ok"|"errMsg", data: <object|array|null>, request_id: "..." }
-# - 错误码区间：10000 通用 / 20000 user / 30000 core / 40000 quote / 50000 ai / 90000 系统
-# - 金额/数量：JSON 中以字符串传输（防 JS 浮点丢精度），后端用 shopspring/decimal
-# - 时间：ISO 8601（YYYY-MM-DDTHH:mm:ssZ08:00），日期 YYYY-MM-DD
-# - 分页：?page=1&page_size=20，响应 data.items + data.total
+# FinVault（锦仓）接口契约定义
+# 
+# 本文档定义系统各层之间的接口契约，确保模块解耦和升级最小改动。
+# 基于 architecture-design.md v2.2 和 domain-model.md v1.0
 
-openapi: "3.0.3"
-info:
-  title: FinVault API
-  version: v1.0-impl
-  description: 个人理财管理系统 HTTP API 契约（第一阶段 M1）
+version: "1.0"
+created_at: "2026-05-17"
+status: "draft"
 
-servers:
-  - url: http://localhost:8080/api/v1
+# ==============
+# 1. Repository 接口（存储层抽象）
+# ==============
+repository:
+  description: "存储层抽象接口，定义在 repository/interfaces.go，GORM 实现在 repository/gorm/"
+  
+  base_repository:
+    name: "BaseRepository[T]"
+    description: "通用 CRUD 接口，各领域 Repository 嵌入此接口"
+    methods:
+      - name: "Create"
+        signature: "Create(ctx context.Context, entity *T) error"
+        description: "创建实体"
+        
+      - name: "GetByID"
+        signature: "GetByID(ctx context.Context, id uint) (*T, error)"
+        description: "按 ID 查询实体"
+        
+      - name: "Update"
+        signature: "Update(ctx context.Context, entity *T) error"
+        description: "更新实体"
+        
+      - name: "Delete"
+        signature: "Delete(ctx context.Context, id uint) error"
+        description: "删除实体（软删）"
+        
+      - name: "List"
+        signature: "List(ctx context.Context, opts ListOptions) ([]T, int64, error)"
+        description: "分页查询列表"
 
-# ============================================================
-# 通用组件
-# ============================================================
-components:
-  parameters:
-    UserIdHeader:
-      name: X-User-Id
-      in: header
-      required: false
-      schema: { type: integer, default: 1 }
-    Page:
-      name: page
-      in: query
-      schema: { type: integer, default: 1, minimum: 1 }
-    PageSize:
-      name: page_size
-      in: query
-      schema: { type: integer, default: 20, minimum: 1, maximum: 200 }
-    OrderBy:
-      name: order_by
-      in: query
-      schema: { type: string, example: "created_at desc" }
+  AssetRepository:
+    name: "AssetRepository"
+    description: "资产仓储接口"
+    methods:
+      - name: "Create"
+        signature: "Create(ctx context.Context, asset *domain.Asset) error"
+      - name: "GetByID"
+        signature: "GetByID(ctx context.Context, id uint) (*domain.Asset, error)"
+      - name: "GetByCode"
+        signature: "GetByCode(ctx context.Context, userID uint, code string) (*domain.Asset, error)"
+      - name: "ListByUser"
+        signature: "ListByUser(ctx context.Context, userID uint, opt ListOption) ([]*domain.Asset, int64, error)"
+      - name: "Update"
+        signature: "Update(ctx context.Context, asset *domain.Asset) error"
+      - name: "Delete"
+        signature: "Delete(ctx context.Context, id uint) error"
+      - name: "ExistsByCode"
+        signature: "ExistsByCode(ctx context.Context, code string) (bool, error)"
 
-  schemas:
-    # ----- 通用 -----
-    Resp:
-      type: object
-      required: [code, message, data, request_id]
-      properties:
-        code: { type: integer, example: 0 }
-        message: { type: string, example: ok }
-        data: {}
-        request_id: { type: string, example: "01J..." }
+  HoldingRepository:
+    name: "HoldingRepository"
+    description: "持仓仓储接口"
+    methods:
+      - name: "Create"
+        signature: "Create(ctx context.Context, holding *domain.Holding) error"
+      - name: "GetByID"
+        signature: "GetByID(ctx context.Context, id uint) (*domain.Holding, error)"
+      - name: "GetByUserAssetPlatform"
+        signature: "GetByUserAssetPlatform(ctx context.Context, userID, assetID, platformID uint) (*domain.Holding, error)"
+      - name: "ListByUser"
+        signature: "ListByUser(ctx context.Context, userID uint, opt ListOption) ([]*domain.Holding, int64, error)"
+      - name: "ListByPlatform"
+        signature: "ListByPlatform(ctx context.Context, platform string) ([]domain.Holding, error)"
+      - name: "ListByType"
+        signature: "ListByType(ctx context.Context, assetType domain.AssetType) ([]domain.Holding, error)"
+      - name: "Update"
+        signature: "Update(ctx context.Context, holding *domain.Holding) error"
+      - name: "GetSummary"
+        signature: "GetSummary(ctx context.Context) (*HoldingSummary, error)"
+      - name: "UpdateQuantityAndCost"
+        signature: "UpdateQuantityAndCost(ctx context.Context, id uint, quantity, totalCost decimal.Decimal) error"
 
-    Page:
-      type: object
-      properties:
-        items: { type: array, items: {} }
-        total: { type: integer }
-        page: { type: integer }
-        page_size: { type: integer }
+  TransactionRepository:
+    name: "TransactionRepository"
+    description: "交易记录仓储接口"
+    methods:
+      - name: "Create"
+        signature: "Create(ctx context.Context, txn *domain.Transaction) error"
+      - name: "GetByID"
+        signature: "GetByID(ctx context.Context, id uint) (*domain.Transaction, error)"
+      - name: "ListByHolding"
+        signature: "ListByHolding(ctx context.Context, holdingID uint) ([]domain.Transaction, error)"
+      - name: "ListByDateRange"
+        signature: "ListByDateRange(ctx context.Context, start, end time.Time) ([]domain.Transaction, error)"
+      - name: "ListByUser"
+        signature: "ListByUser(ctx context.Context, userID uint, opt ListOption) ([]*domain.Transaction, int64, error)"
+      - name: "GetByExternalID"
+        signature: "GetByExternalID(ctx context.Context, platformID uint, externalID string) (*domain.Transaction, error)"
 
-    Decimal:
-      type: string
-      description: 金额或数量，字符串传输保精度
-      example: "12345.6789"
+  PriceQuoteRepository:
+    name: "PriceQuoteRepository"
+    description: "行情快照仓储接口"
+    methods:
+      - name: "Create"
+        signature: "Create(ctx context.Context, quote *domain.PriceQuote) error"
+      - name: "GetLatestByAsset"
+        signature: "GetLatestByAsset(ctx context.Context, assetID uint) (*domain.PriceQuote, error)"
+      - name: "ListByAssetAndDateRange"
+        signature: "ListByAssetAndDateRange(ctx context.Context, assetID uint, start, end time.Time) ([]domain.PriceQuote, error)"
 
-    # ----- 资产 / 子类型 -----
-    AssetType:
-      type: string
-      enum: [fund, stock, wealth, cash]
+  ExchangeRateRepository:
+    name: "ExchangeRateRepository"
+    description: "汇率快照仓储接口"
+    methods:
+      - name: "Create"
+        signature: "Create(ctx context.Context, rate *domain.ExchangeRate) error"
+      - name: "GetLatest"
+        signature: "GetLatest(ctx context.Context, from, to string, date time.Time) (*domain.ExchangeRate, error)"
+      - name: "ListByDateRange"
+        signature: "ListByDateRange(ctx context.Context, from, to string, start, end time.Time) ([]domain.ExchangeRate, error)"
 
-    Asset:
-      type: object
-      required: [user_id, asset_code, name, asset_type, currency, status]
-      properties:
-        id: { type: integer }
-        user_id: { type: integer }
-        asset_code: { type: string, maxLength: 32 }
-        name: { type: string, maxLength: 128 }
-        asset_type: { $ref: "#/components/schemas/AssetType" }
-        currency: { type: string, example: CNY }
-        issuer_platform_id: { type: integer, nullable: true }
-        risk_level: { type: string, enum: [R1, R2, R3, R4, R5], nullable: true }
-        status: { type: string, enum: [active, delisted, matured] }
-        remark: { type: string }
-        fund_detail:    { $ref: "#/components/schemas/FundDetail",   nullable: true }
-        stock_detail:   { $ref: "#/components/schemas/StockDetail",  nullable: true }
-        wealth_detail:  { $ref: "#/components/schemas/WealthDetail", nullable: true }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
+# ==============
+# 2. CacheProvider 接口（缓存层抽象）
+# ==============
+cache:
+  description: "缓存层抽象接口，定义在 cache/interfaces.go"
+  
+  CacheProvider:
+    name: "CacheProvider"
+    description: "缓存提供者接口，本地阶段用 sync.Map + TTL，生产阶段用 Redis"
+    methods:
+      - name: "Get"
+        signature: "Get(ctx context.Context, key string) (string, error)"
+        description: "获取缓存值，不存在返回 error"
+        
+      - name: "Set"
+        signature: "Set(ctx context.Context, key string, value string, ttl time.Duration) error"
+        description: "设置缓存值，ttl=0 表示永不过期"
+        
+      - name: "Delete"
+        signature: "Delete(ctx context.Context, key string) error"
+        description: "删除缓存"
+        
+      - name: "Exists"
+        signature: "Exists(ctx context.Context, key string) (bool, error)"
+        description: "检查缓存是否存在"
 
-    FundDetail:
-      type: object
-      properties:
-        asset_id: { type: integer }
-        fund_type: { type: string, enum: [equity, bond, hybrid, money, index, qdii] }
-        manager: { type: string }
-        company: { type: string }
-        inception_date: { type: string, format: date, nullable: true }
-        latest_nav: { $ref: "#/components/schemas/Decimal" }
-        latest_nav_date: { type: string, format: date, nullable: true }
-        benchmark: { type: string }
+# ==============
+# 3. Agent Runner 接口（AI 运行时抽象）
+# ==============
+agent:
+  description: "AI Agent 运行时接口，定义在 internal/llm/agent/runner.go"
+  
+  ToolCall:
+    name: "ToolCall"
+    type: "struct"
+    fields:
+      - name: "Name"
+        type: "string"
+        description: "工具名称"
+      - name: "Arguments"
+        type: "map[string]interface{}"
+        description: "工具参数"
+      - name: "StartedAt"
+        type: "time.Time"
+        description: "开始时间"
+      - name: "FinishedAt"
+        type: "time.Time"
+        description: "结束时间"
+      - name: "Status"
+        type: "string"
+        description: "状态：success / failed / timeout"
+      - name: "ErrorMessage"
+        type: "string"
+        description: "错误信息"
 
-    StockDetail:
-      type: object
-      required: [market]
-      properties:
-        asset_id: { type: integer }
-        market: { type: string, enum: [SH, SZ, HK, US, BJ] }
-        industry: { type: string }
-        sector: { type: string }
-        listing_date: { type: string, format: date, nullable: true }
-        total_shares: { $ref: "#/components/schemas/Decimal" }
-        latest_price: { $ref: "#/components/schemas/Decimal" }
-        latest_price_time: { type: string, format: date-time, nullable: true }
+  TokenUsage:
+    name: "TokenUsage"
+    type: "struct"
+    fields:
+      - name: "PromptTokens"
+        type: "int"
+        description: "提示词 token 数"
+      - name: "CompletionTokens"
+        type: "int"
+        description: "生成 token 数"
+      - name: "TotalTokens"
+        type: "int"
+        description: "总 token 数"
 
-    WealthDetail:
-      type: object
-      required: [product_type]
-      properties:
-        asset_id: { type: integer }
-        product_type: { type: string, enum: [fixed_deposit, structured, floating, pension] }
-        expected_yield: { $ref: "#/components/schemas/Decimal" }
-        actual_yield: { $ref: "#/components/schemas/Decimal" }
-        start_date: { type: string, format: date, nullable: true }
-        end_date: { type: string, format: date, nullable: true }
-        term_days: { type: integer }
-        min_amount: { $ref: "#/components/schemas/Decimal" }
-        redemption_rule: { type: string }
-        is_auto_renewal: { type: boolean }
+  Runner:
+    name: "Runner"
+    description: "业务侧 Agent 运行时接口，定义在 internal/llm/agent/runner.go"
+    methods:
+      - name: "Run"
+        signature: "Run(ctx context.Context, sessionID string, userMessage string) (assistantMessage string, toolCalls []ToolCall, tokenUsage TokenUsage, err error)"
+        description: "执行一次 Agent 对话轮次"
 
-    # ----- 持仓 -----
-    Holding:
-      type: object
-      properties:
-        id: { type: integer }
-        user_id: { type: integer }
-        asset_id: { type: integer }
-        platform_id: { type: integer }
-        portfolio_id: { type: integer, nullable: true }
-        quantity: { $ref: "#/components/schemas/Decimal" }
-        avg_cost: { $ref: "#/components/schemas/Decimal" }
-        total_cost: { $ref: "#/components/schemas/Decimal" }
-        realized_pnl: { $ref: "#/components/schemas/Decimal" }
-        total_dividend: { $ref: "#/components/schemas/Decimal" }
-        cost_method: { type: string, enum: [weighted_avg, fifo] }
-        status: { type: string, enum: [holding, closed, matured] }
-        first_buy_at: { type: string, format: date-time, nullable: true }
-        last_txn_at: { type: string, format: date-time, nullable: true }
-        asset: { $ref: "#/components/schemas/Asset" }
+# ==============
+# 4. SessionStore 接口（会话持久化层抽象）
+# ==============
+session:
+  description: "AI 会话持久化层接口，定义在 internal/llm/session/store.go"
+  
+  ListSessionsOptions:
+    name: "ListSessionsOptions"
+    type: "struct"
+    fields:
+      - name: "UserID"
+        type: "uint"
+        description: "用户 ID 过滤"
+      - name: "Limit"
+        type: "int"
+        description: "返回数量限制"
+      - name: "Offset"
+        type: "int"
+        description: "偏移量"
 
-    HoldingView:
-      allOf:
-        - $ref: "#/components/schemas/Holding"
-        - type: object
-          properties:
-            latest_price: { $ref: "#/components/schemas/Decimal" }
-            market_value: { $ref: "#/components/schemas/Decimal" }
-            unrealized_pnl: { $ref: "#/components/schemas/Decimal" }
-            total_pnl: { $ref: "#/components/schemas/Decimal" }
-            pnl_ratio: { $ref: "#/components/schemas/Decimal" }
-            market_value_cny: { $ref: "#/components/schemas/Decimal" }
+  SessionStore:
+    name: "SessionStore"
+    description: "会话持久化接口"
+    methods:
+      - name: "CreateSession"
+        signature: "CreateSession(ctx context.Context, s *domain.Session) error"
+        description: "创建会话"
+        
+      - name: "GetSession"
+        signature: "GetSession(ctx context.Context, sessionID string) (*domain.Session, error)"
+        description: "获取会话"
+        
+      - name: "UpdateSession"
+        signature: "UpdateSession(ctx context.Context, s *domain.Session) error"
+        description: "更新会话"
+        
+      - name: "DeleteSession"
+        signature: "DeleteSession(ctx context.Context, sessionID string) error"
+        description: "删除会话"
+        
+      - name: "ListSessions"
+        signature: "ListSessions(ctx context.Context, opts ListSessionsOptions) ([]domain.Session, int64, error)"
+        description: "列出会话"
+        
+      - name: "ListMessages"
+        signature: "ListMessages(ctx context.Context, sessionID string, limit int) ([]domain.Message, error)"
+        description: "按 created_at 升序拉取最近 N 条消息"
+        
+      - name: "AppendMessage"
+        signature: "AppendMessage(ctx context.Context, m *domain.Message) error"
+        description: "追加消息"
+        
+      - name: "AppendStep"
+        signature: "AppendStep(ctx context.Context, step *domain.AgentStep) error"
+        description: "追加步骤事件（仅追加从不更新；写入前 mask 敏感字段）"
+        
+      - name: "EstimateStepsSize"
+        signature: "EstimateStepsSize(ctx context.Context) (int64, error)"
+        description: "估算 t_fv_ai_agent_steps 表占用空间（字节），用于 max_steps_size_mb 滚动清理"
 
-    HoldingSummary:
-      type: object
-      properties:
-        display_currency: { type: string, example: CNY }
-        total_market_value: { $ref: "#/components/schemas/Decimal" }
-        total_cost: { $ref: "#/components/schemas/Decimal" }
-        total_pnl: { $ref: "#/components/schemas/Decimal" }
-        pnl_ratio: { $ref: "#/components/schemas/Decimal" }
-        by_type:
-          type: array
-          items:
-            type: object
-            properties:
-              asset_type: { $ref: "#/components/schemas/AssetType" }
-              market_value: { $ref: "#/components/schemas/Decimal" }
-              ratio: { $ref: "#/components/schemas/Decimal" }
-        by_platform:
-          type: array
-          items:
-            type: object
-            properties:
-              platform_id: { type: integer }
-              platform_name: { type: string }
-              market_value: { $ref: "#/components/schemas/Decimal" }
-              ratio: { $ref: "#/components/schemas/Decimal" }
-        by_currency:
-          type: array
-          items:
-            type: object
-            properties:
-              currency: { type: string }
-              market_value: { $ref: "#/components/schemas/Decimal" }
-              ratio: { $ref: "#/components/schemas/Decimal" }
+# ==============
+# 5. EventBus 接口（事件层抽象，预留）
+# ==============
+event:
+  description: "事件总线接口，定义在 event/interfaces.go，本地阶段用 Go channel，分布式阶段用 NATS/Kafka"
+  
+  Event:
+    name: "Event"
+    type: "struct"
+    fields:
+      - name: "Topic"
+        type: "string"
+        description: "事件主题"
+      - name: "Payload"
+        type: "any"
+        description: "事件载荷"
 
-    # ----- 交易 -----
-    TxnType:
-      type: string
-      enum:
-        - buy
-        - sell
-        - dividend
-        - dividend_reinvest
-        - split
-        - bonus
-        - mature
-        - interest
-        - deposit
-        - withdraw
-        - cash_in
-        - cash_out
-        - adjust
+  EventHandler:
+    name: "EventHandler"
+    type: "func(ctx context.Context, event Event) error"
+    description: "事件处理函数"
 
-    Transaction:
-      type: object
-      required: [holding_id, txn_type, txn_time, quantity, price, amount, currency]
-      properties:
-        id: { type: integer }
-        user_id: { type: integer }
-        holding_id: { type: integer }
-        asset_id: { type: integer }
-        platform_id: { type: integer }
-        txn_type: { $ref: "#/components/schemas/TxnType" }
-        txn_time: { type: string, format: date-time }
-        quantity: { $ref: "#/components/schemas/Decimal" }
-        price: { $ref: "#/components/schemas/Decimal" }
-        amount: { $ref: "#/components/schemas/Decimal" }
-        fee: { $ref: "#/components/schemas/Decimal" }
-        tax: { $ref: "#/components/schemas/Decimal" }
-        net_amount: { $ref: "#/components/schemas/Decimal" }
-        currency: { type: string, example: CNY }
-        source: { type: string, enum: [manual, import, auto_mature], default: manual }
-        external_id: { type: string }
-        note: { type: string }
-        created_at: { type: string, format: date-time }
+  EventPublisher:
+    name: "EventPublisher"
+    description: "事件发布接口"
+    methods:
+      - name: "Publish"
+        signature: "Publish(ctx context.Context, event Event) error"
+        description: "发布事件"
 
-    # ----- 行情 / 汇率 -----
-    PriceQuote:
-      type: object
-      properties:
-        id: { type: integer }
-        asset_id: { type: integer }
-        price: { $ref: "#/components/schemas/Decimal" }
-        quote_time: { type: string, format: date-time }
-        change_pct: { $ref: "#/components/schemas/Decimal" }
-        volume: { $ref: "#/components/schemas/Decimal" }
-        source: { type: string, enum: [manual, api_sina, api_tencent, api_eastmoney] }
+  EventSubscriber:
+    name: "EventSubscriber"
+    description: "事件订阅接口"
+    methods:
+      - name: "Subscribe"
+        signature: "Subscribe(topic string, handler EventHandler) error"
+        description: "订阅事件"
 
-    ExchangeRate:
-      type: object
-      properties:
-        id: { type: integer }
-        from_currency: { type: string }
-        to_currency: { type: string }
-        rate: { $ref: "#/components/schemas/Decimal" }
-        quote_date: { type: string, format: date }
-        source: { type: string, enum: [manual, pboc, api] }
+  EventBus:
+    name: "EventBus"
+    description: "事件总线组合接口（EventPublisher + EventSubscriber）"
+    methods:
+      - name: "(all methods from EventPublisher)"
+      - name: "(all methods from EventSubscriber)"
 
-    # ----- AI -----
-    AIScene:
-      type: string
-      enum: [chat, buy_sell, analysis, report]
+# ==============
+# 6. IDGenerator 接口（ID 生成抽象）
+# ==============
+id:
+  description: "ID 生成抽象接口，定义在 internal/id/generator.go"
+  
+  IDGenerator:
+    name: "IDGenerator"
+    description: "ID 生成器接口"
+    methods:
+      - name: "NextID"
+        signature: "NextID() string"
+        description: "生成字符串型 ID（UUID v7 / Snowflake 字符串）"
+        
+      - name: "NextInt64"
+        signature: "NextInt64() int64"
+        description: "生成数字型 ID（仅 Snowflake 实现支持，UUID 实现可返回错误）"
 
-    AIConversation:
-      type: object
-      properties:
-        id: { type: integer }
-        user_id: { type: integer }
-        title: { type: string }
-        scene: { $ref: "#/components/schemas/AIScene" }
-        llm_provider: { type: string, example: deepseek }
-        llm_model: { type: string }
-        message_count: { type: integer }
-        total_tokens: { type: integer }
-        status: { type: string, enum: [active, archived, deleted] }
-        created_at: { type: string, format: date-time }
+# ==============
+# 7. Migrator 接口（数据库迁移抽象）
+# ==============
+database:
+  description: "数据库迁移抽象接口，定义在 internal/database/migrator.go"
+  
+  Migrator:
+    name: "Migrator"
+    description: "数据库迁移接口"
+    methods:
+      - name: "Up"
+        signature: "Up(ctx context.Context) error"
+        description: "执行迁移（全部或指定步数）"
+        
+      - name: "Down"
+        signature: "Down(ctx context.Context, steps int) error"
+        description: "回滚迁移（指定步数）"
+        
+      - name: "Version"
+        signature: "Version(ctx context.Context) (uint, bool, error)"
+        description: "获取当前版本（版本号，是否为脏状态）"
 
-    AIMessage:
-      type: object
-      properties:
-        id: { type: integer }
-        conversation_id: { type: integer }
-        role: { type: string, enum: [system, user, assistant, tool] }
-        content: { type: string }
-        tool_name: { type: string }
-        tool_args: { type: string }
-        tool_result: { type: string }
-        token_count: { type: integer }
-        created_at: { type: string, format: date-time }
+# ==============
+# 8. ReportExporter 接口（报表导出抽象）
+# ==============
+report:
+  description: "报表导出抽象接口，定义在 internal/report/exporter.go"
+  
+  ReportFormat:
+    name: "ReportFormat"
+    type: "string"
+    values:
+      - name: "FormatExcel"
+        value: "xlsx"
+        description: "Excel 格式"
+      - name: "FormatMarkdown"
+        value: "md"
+        description: "Markdown 格式"
+      - name: "FormatPDF"
+        value: "pdf"
+        description: "PDF 格式（第一阶段不实现）"
 
-    Platform:
-      type: object
-      properties:
-        id: { type: integer }
-        code: { type: string }
-        name: { type: string }
-        platform_type: { type: string, enum: [bank, fund_platform, broker, internet] }
-        icon_url: { type: string }
-        status: { type: string }
+  ReportExporter:
+    name: "ReportExporter"
+    description: "报表导出器接口"
+    methods:
+      - name: "Format"
+        signature: "Format() ReportFormat"
+        description: "返回导出格式"
+        
+      - name: "Export"
+        signature: "Export(ctx context.Context, report *domain.Report, w io.Writer) error"
+        description: "导出报表到 Writer"
 
-# ============================================================
-# 路径
-# ============================================================
-paths:
+# ==============
+# 9. Service 层接口（业务逻辑层）
+# ==============
+service:
+  description: "Service 层接口定义，业务逻辑编排"
+  
+  AssetService:
+    name: "AssetService"
+    description: "资产管理服务接口"
+    methods:
+      - name: "Create"
+        signature: "Create(ctx context.Context, input CreateAssetInput) (*domain.Asset, error)"
+      - name: "GetByID"
+        signature: "GetByID(ctx context.Context, id uint) (*domain.Asset, error)"
+      - name: "List"
+        signature: "List(ctx context.Context, opts ListOptions) ([]*domain.Asset, int64, error)"
+        description: "列出资产，支持可选参数 include_holdings 控制是否返回持仓和盈亏数据"
+      - name: "Update"
+        signature: "Update(ctx context.Context, id uint, input UpdateAssetInput) (*domain.Asset, error)"
+      - name: "Delete"
+        signature: "Delete(ctx context.Context, id uint) error"
+    types:
+      - name: "ListOptions"
+        type: "struct"
+        description: "资产列表查询选项"
+        fields:
+          - name: "IncludeHoldings"
+            type: "bool"
+            description: "是否包含持仓和盈亏数据（可选，默认 false）"
+          - name: "AssetType"
+            type: "string"
+            description: "资产类型过滤（可选）"
+          - name: "PlatformID"
+            type: "uint"
+            description: "平台 ID 过滤（可选）"
+          - name: "UserID"
+            type: "uint"
+            description: "用户 ID（可选，多用户阶段使用）"
+          - name: "Page"
+            type: "int"
+            description: "页码（从 1 开始）"
+          - name: "PageSize"
+            type: "int"
+            description: "每页数量"
 
-  # ----- Meta -----
-  /healthz:
-    get:
-      summary: 健康检查
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status: { type: string, example: ok }
-                  version: { type: string }
-                  time: { type: string, format: date-time }
+  HoldingService:
+    name: "HoldingService"
+    description: "持仓管理服务接口"
+    methods:
+      - name: "GetByID"
+        signature: "GetByID(ctx context.Context, id uint) (*domain.Holding, error)"
+      - name: "List"
+        signature: "List(ctx context.Context, opts ListOptions) ([]*HoldingView, int64, error)"
+      - name: "GetSummary"
+        signature: "GetSummary(ctx context.Context, displayCurrency string) (*HoldingSummaryView, error)"
+      - name: "Recalculate"
+        signature: "Recalculate(ctx context.Context, holdingID uint) error"
 
-  /platforms:
-    get:
-      summary: 平台字典
-      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/Resp"
-                  - type: object
-                    properties:
-                      data:
-                        type: array
-                        items: { $ref: "#/components/schemas/Platform" }
+  TransactionService:
+    name: "TransactionService"
+    description: "交易记录服务接口"
+    methods:
+      - name: "Create"
+        signature: "Create(ctx context.Context, input CreateTransactionInput) (*domain.Transaction, error)"
+      - name: "GetByID"
+        signature: "GetByID(ctx context.Context, id uint) (*domain.Transaction, error)"
+      - name: "List"
+        signature: "List(ctx context.Context, opts ListOptions) ([]*domain.Transaction, int64, error)"
+      - name: "Delete"
+        signature: "Delete(ctx context.Context, id uint) error"
+      - name: "ImportCSV"
+        signature: "ImportCSV(ctx context.Context, reader io.Reader) (int, error)"
 
-  # ============================================================
-  # 资产（基金 / 股票 / 理财 / 现金 统一一套 CRUD，传 asset_type 区分）
-  # ============================================================
-  /assets:
-    get:
-      summary: 资产列表（按类型筛选）
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - {$ref: "#/components/parameters/Page"}
-        - {$ref: "#/components/parameters/PageSize"}
-        - name: asset_type
-          in: query
-          schema: { $ref: "#/components/schemas/AssetType" }
-        - name: keyword
-          in: query
-          schema: { type: string, description: "按 code/name 模糊搜索" }
-        - name: status
-          in: query
-          schema: { type: string, enum: [active, delisted, matured] }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/Resp"
-                  - type: object
-                    properties:
-                      data: { $ref: "#/components/schemas/Page" }
-    post:
-      summary: 创建资产（含子类型 detail，单一接口完成）
-      description: |
-        请求体根据 asset_type 自动选择 detail 字段：
-        - asset_type=fund   → 必填 fund_detail
-        - asset_type=stock  → 必填 stock_detail
-        - asset_type=wealth → 必填 wealth_detail
-        - asset_type=cash   → 不需要 detail，asset_code 必须为 `CASH-{platform}-{currency}`
-      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/Asset" }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/Resp"
-                  - type: object
-                    properties:
-                      data: { $ref: "#/components/schemas/Asset" }
+  AISessionService:
+    name: "AISessionService"
+    description: "AI 会话管理服务接口"
+    methods:
+      - name: "Create"
+        signature: "Create(ctx context.Context, userID uint, title string) (*domain.Session, error)"
+      - name: "GetByID"
+        signature: "GetByID(ctx context.Context, userID uint, sessionID string) (*domain.Session, error)"
+      - name: "List"
+        signature: "List(ctx context.Context, userID uint, opts ListOptions) ([]*domain.Session, int64, error)"
+      - name: "Delete"
+        signature: "Delete(ctx context.Context, userID uint, sessionID string) error"
 
-  /assets/{id}:
-    get:
-      summary: 资产详情
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - { name: id, in: path, required: true, schema: { type: integer } }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/Resp"
-                  - type: object
-                    properties:
-                      data: { $ref: "#/components/schemas/Asset" }
-    put:
-      summary: 更新资产（含 detail）
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - { name: id, in: path, required: true, schema: { type: integer } }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/Asset" }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
-    delete:
-      summary: 软删资产（仅在无持仓时允许）
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - { name: id, in: path, required: true, schema: { type: integer } }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+  AIMessageService:
+    name: "AIMessageService"
+    description: "AI 消息管理服务接口"
+    methods:
+      - name: "Send"
+        signature: "Send(ctx context.Context, userID uint, sessionID, userMsg string) (*SendResult, error)"
+        description: "发送用户消息并获取 AI 回复（调用 Runner.Run）"
+      - name: "List"
+        signature: "List(ctx context.Context, sessionID string, limit int) ([]domain.Message, error)"
+        description: "列出会话消息"
 
-  # ----- 子类型快捷接口（前端按业务页面调用，更直观）-----
-  /assets/funds:
-    get:
-      summary: 基金列表（语法糖：等价 /assets?asset_type=fund）
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - {$ref: "#/components/parameters/Page"}
-        - {$ref: "#/components/parameters/PageSize"}
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
-  /assets/stocks:
-    get:
-      summary: 股票列表（语法糖：等价 /assets?asset_type=stock）
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - {$ref: "#/components/parameters/Page"}
-        - {$ref: "#/components/parameters/PageSize"}
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
-  /assets/wealth:
-    get:
-      summary: 理财产品列表（语法糖：等价 /assets?asset_type=wealth）
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - {$ref: "#/components/parameters/Page"}
-        - {$ref: "#/components/parameters/PageSize"}
-        - name: maturing_within_days
-          in: query
-          schema: { type: integer, description: "即将到期天数过滤" }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
-  /assets/cash:
-    get:
-      summary: 现金账户列表（语法糖：等价 /assets?asset_type=cash）
-      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+# ==============
+# 10. Handler 层接口（HTTP 处理层）
+# ==============
+handler:
+  description: "Handler 层接口定义，HTTP 请求处理"
+  
+  AssetHandler:
+    name: "AssetHandler"
+    description: "资产管理 Handler"
+    methods:
+      - name: "Create"
+        signature: "Create(c *gin.Context)"
+        http: "POST /api/v1/assets"
+      - name: "Get"
+        signature: "Get(c *gin.Context)"
+        http: "GET /api/v1/assets/:id"
+      - name: "List"
+        signature: "List(c *gin.Context)"
+        http: "GET /api/v1/assets"
+        description: "支持可选查询参数 include_holdings=true 返回持仓和盈亏数据"
+      - name: "Update"
+        signature: "Update(c *gin.Context)"
+        http: "PUT /api/v1/assets/:id"
+      - name: "Delete"
+        signature: "Delete(c *gin.Context)"
+        http: "DELETE /api/v1/assets/:id"
 
-  # ============================================================
-  # 持仓
-  # ============================================================
-  /holdings:
-    get:
-      summary: 持仓列表（含计算字段）
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - {$ref: "#/components/parameters/Page"}
-        - {$ref: "#/components/parameters/PageSize"}
-        - { name: asset_type, in: query, schema: { $ref: "#/components/schemas/AssetType" } }
-        - { name: platform_id, in: query, schema: { type: integer } }
-        - { name: status, in: query, schema: { type: string } }
-        - { name: display_currency, in: query, schema: { type: string, enum: [raw, CNY], default: CNY } }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/Resp"
-                  - type: object
-                    properties:
-                      data:
-                        type: object
-                        properties:
-                          items:
-                            type: array
-                            items: { $ref: "#/components/schemas/HoldingView" }
-                          total: { type: integer }
+  HoldingHandler:
+    name: "HoldingHandler"
+    description: "持仓管理 Handler"
+    methods:
+      - name: "List"
+        signature: "List(c *gin.Context)"
+        http: "GET /api/v1/holdings"
+      - name: "GetSummary"
+        signature: "GetSummary(c *gin.Context)"
+        http: "GET /api/v1/holdings/summary"
 
-  /holdings/summary:
-    get:
-      summary: 持仓总览（按类型 / 平台 / 币种聚合）
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - { name: display_currency, in: query, schema: { type: string, enum: [raw, CNY], default: CNY } }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/Resp"
-                  - type: object
-                    properties:
-                      data: { $ref: "#/components/schemas/HoldingSummary" }
+  TransactionHandler:
+    name: "TransactionHandler"
+    description: "交易记录 Handler"
+    methods:
+      - name: "Create"
+        signature: "Create(c *gin.Context)"
+        http: "POST /api/v1/transactions"
+      - name: "List"
+        signature: "List(c *gin.Context)"
+        http: "GET /api/v1/transactions"
+      - name: "ImportCSV"
+        signature: "ImportCSV(c *gin.Context)"
+        http: "POST /api/v1/transactions/import"
 
-  /holdings/{id}:
-    get:
-      summary: 持仓详情
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - { name: id, in: path, required: true, schema: { type: integer } }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
-    patch:
-      summary: 修改 cost_method（weighted_avg ↔ fifo）
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - { name: id, in: path, required: true, schema: { type: integer } }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                cost_method: { type: string, enum: [weighted_avg, fifo] }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+  AISessionHandler:
+    name: "AISessionHandler"
+    description: "AI 会话 Handler"
+    methods:
+      - name: "Create"
+        signature: "Create(c *gin.Context)"
+        http: "POST /api/v1/ai/sessions"
+      - name: "List"
+        signature: "List(c *gin.Context)"
+        http: "GET /api/v1/ai/sessions"
+      - name: "Get"
+        signature: "Get(c *gin.Context)"
+        http: "GET /api/v1/ai/sessions/:id"
+      - name: "Delete"
+        signature: "Delete(c *gin.Context)"
+        http: "DELETE /api/v1/ai/sessions/:id"
 
-  # ============================================================
-  # 交易
-  # ============================================================
-  /transactions:
-    get:
-      summary: 交易流水查询
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - {$ref: "#/components/parameters/Page"}
-        - {$ref: "#/components/parameters/PageSize"}
-        - { name: holding_id, in: query, schema: { type: integer } }
-        - { name: asset_id, in: query, schema: { type: integer } }
-        - { name: platform_id, in: query, schema: { type: integer } }
-        - { name: txn_type, in: query, schema: { $ref: "#/components/schemas/TxnType" } }
-        - { name: start, in: query, schema: { type: string, format: date } }
-        - { name: end,   in: query, schema: { type: string, format: date } }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
-    post:
-      summary: 录入交易（含 buy/sell/dividend/mature 等 13 种类型）
-      description: |
-        统一接口：
-        - 必填 user_id (Header) / holding_id 或 (asset_id+platform_id) / txn_type / txn_time / quantity / price / amount
-        - net_amount 由后端按规则计算（buy: amount+fee+tax；sell: amount-fee-tax）
-        - 同 (user_id, platform_id, external_id) 防重
-      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/Transaction" }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+  AIMessageHandler:
+    name: "AIMessageHandler"
+    description: "AI 消息 Handler"
+    methods:
+      - name: "Send"
+        signature: "Send(c *gin.Context)"
+        http: "POST /api/v1/ai/sessions/:id/messages"
+      - name: "List"
+        signature: "List(c *gin.Context)"
+        http: "GET /api/v1/ai/sessions/:id/messages"
 
-  /transactions/{id}:
-    get:
-      summary: 交易详情
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - { name: id, in: path, required: true, schema: { type: integer } }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
-    delete:
-      summary: 删除交易（同步回滚 Holding）
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - { name: id, in: path, required: true, schema: { type: integer } }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+  AIMetaHandler:
+    name: "AIMetaHandler"
+    description: "AI 元信息 Handler（Provider 列表）"
+    methods:
+      - name: "GetProviders"
+        signature: "GetProviders(c *gin.Context)"
+        http: "GET /api/v1/ai/providers"
 
-  /transactions/import:
-    post:
-      summary: CSV 批量导入
-      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              properties:
-                file: { type: string, format: binary }
-                platform_id: { type: integer }
-                dry_run: { type: boolean, default: false }
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/Resp"
-                  - type: object
-                    properties:
-                      data:
-                        type: object
-                        properties:
-                          total: { type: integer }
-                          succeeded: { type: integer }
-                          skipped: { type: integer }
-                          failed: { type: integer }
-                          errors:
-                            type: array
-                            items:
-                              type: object
-                              properties:
-                                row: { type: integer }
-                                message: { type: string }
+# ==============
+# 11. AI 工具接口（Tool 定义）
+# ==============
+tools:
+  description: "AI 工具定义，每个 Tool 一个文件，入参定义为 Go 结构体 + json tag"
+  
+  tools_list:
+    - name: "search_fund"
+      description: "按 keyword 模糊匹配基金 code/name，结果上限 20"
+      user_isolation: "公共数据，无需 user_id"
+      input_type: "SearchFundInput"
+      fields:
+        - name: "Keyword"
+          type: "string"
+          required: true
+          description: "搜索关键词"
 
-  # ============================================================
-  # 行情
-  # ============================================================
-  /quotes/latest:
-    get:
-      summary: 批量获取最新行情
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - { name: asset_ids, in: query, required: true, schema: { type: string, description: "逗号分隔" } }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+    - name: "market_quote"
+      description: "按 symbol（如 sh000001）查实时行情快照"
+      user_isolation: "需要 user_id（资产权属校验）"
+      input_type: "MarketQuoteInput"
+      fields:
+        - name: "Symbol"
+          type: "string"
+          required: true
+          description: "行情代码"
 
-  /quotes/refresh:
-    post:
-      summary: 主动刷新行情（按 asset_id 列表，从 source_priority 拉取）
-      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                asset_ids:
-                  type: array
-                  items: { type: integer }
-                source:
-                  type: string
-                  enum: [auto, eastmoney, sina, tencent]
-                  default: auto
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+    - name: "market_data"
+      description: "行情数据查询（含历史）"
+      user_isolation: "需要 user_id"
+      input_type: "MarketDataInput"
+      fields:
+        - name: "Symbol"
+          type: "string"
+          required: true
+        - name: "StartDate"
+          type: "string"
+          required: false
+        - name: "EndDate"
+          type: "string"
+          required: false
 
-  /quotes:
-    post:
-      summary: 手动写入行情（用户 source=manual）
-      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/PriceQuote" }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+    - name: "holding_query"
+      description: "查询当前持仓明细"
+      user_isolation: "需要 user_id（强制 WHERE user_id=?）"
+      input_type: "HoldingQueryInput"
+      fields:
+        - name: "Platform"
+          type: "string"
+          required: false
+        - name: "AssetType"
+          type: "string"
+          required: false
 
-  # ============================================================
-  # 汇率
-  # ============================================================
-  /rates:
-    get:
-      summary: 汇率查询
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - { name: from, in: query, required: true, schema: { type: string } }
-        - { name: to, in: query, required: true, schema: { type: string } }
-        - { name: as_of, in: query, schema: { type: string, format: date } }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
-    post:
-      summary: 录入/更新汇率
-      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/ExchangeRate" }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+    - name: "profit_calc"
+      description: "计算盈亏数据"
+      user_isolation: "需要 user_id"
+      input_type: "ProfitCalcInput"
+      fields:
+        - name: "HoldingID"
+          type: "uint"
+          required: false
 
-  # ============================================================
-  # AI 对话
-  # ============================================================
-  /ai/providers:
-    get:
-      summary: 已配置的 LLM Provider 列表
-      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/Resp"
-                  - type: object
-                    properties:
-                      data:
-                        type: array
-                        items:
-                          type: object
-                          properties:
-                            name: { type: string, example: deepseek }
-                            model: { type: string, example: deepseek-chat }
-                            is_default: { type: boolean }
+    - name: "platform_summary"
+      description: "各平台资产汇总"
+      user_isolation: "需要 user_id"
+      input_type: "PlatformSummaryInput"
+      fields:
+        - name: "DisplayCurrency"
+          type: "string"
+          required: false
+          default: "CNY"
 
-  /ai/conversations:
-    get:
-      summary: 我的会话列表
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - {$ref: "#/components/parameters/Page"}
-        - {$ref: "#/components/parameters/PageSize"}
-        - { name: scene, in: query, schema: { $ref: "#/components/schemas/AIScene" } }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
-    post:
-      summary: 新建会话
-      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [scene]
-              properties:
-                title: { type: string }
-                scene: { $ref: "#/components/schemas/AIScene" }
-                llm_provider: { type: string, description: "可空，默认走 cfg.llm.default" }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+    - name: "history_query"
+      description: "查询历史交易记录"
+      user_isolation: "需要 user_id"
+      input_type: "HistoryQueryInput"
+      fields:
+        - name: "StartDate"
+          type: "string"
+          required: false
+        - name: "EndDate"
+          type: "string"
+          required: false
+        - name: "TxnType"
+          type: "string"
+          required: false
 
-  /ai/conversations/{id}/messages:
-    get:
-      summary: 拉取历史消息
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - { name: id, in: path, required: true, schema: { type: integer } }
-        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+# ==============
+# 12. 依赖注入规范
+# ==============
+dependency_injection:
+  description: "依赖注入规范，定义在 internal/bootstrap/wire.go"
+  
+  principles:
+    - "所有依赖在 internal/bootstrap/ 中通过显式组装（手动依赖注入）"
+    - "第一阶段不使用 DI 框架"
+    - "main.go 只负责加载配置 + 调 bootstrap.Wire(cfg) + 启动 HTTP 服务"
+    - "替换任何组件只改 internal/bootstrap/ 这一处"
+    - "未来升级到 Wire：把 bootstrap/wire.go 拆为多个 ProviderSet"
+  
+  assembly_order:
+    - step: 1
+      description: "初始化 DB（database/factory.go）"
+    - step: 2
+      description: "初始化 Cache（cache/factory.go）"
+    - step: 3
+      description: "创建 Repositories（repository/gorm/ 实现）"
+    - step: 4
+      description: "装配 AI 层（internal/llm/ 4 子包）"
+    - step: 5
+      description: "创建 Services（依赖 Repository / Cache / Runner 接口）"
+    - step: 6
+      description: "创建 Handlers（依赖 Services 接口）"
+    - step: 7
+      description: "注册路由（bootstrap/router.go）"
 
-  /ai/chat/stream:
-    post:
-      summary: 流式对话（SSE）
-      description: |
-        请求体含 conversation_id（可空，第一次自动创建）、scene、user 消息。
-        响应 Content-Type: text/event-stream
-        每条 event:
-          ```
-          data: {"type":"chunk","content":"...","done":false}
-          data: {"type":"tool_call","name":"holding_query","args":"..."}
-          data: {"type":"done","conversation_id":123,"usage":{...}}
-          ```
-      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [scene, content]
-              properties:
-                conversation_id: { type: integer, nullable: true }
-                scene: { $ref: "#/components/schemas/AIScene" }
-                content: { type: string }
-                llm_provider: { type: string, nullable: true, description: "可覆盖会话级别 provider" }
-      responses:
-        "200":
-          description: SSE 流
-          content:
-            text/event-stream:
-              schema:
-                type: string
+# ==============
+# 13. 事务边界定义
+# ==============
+transaction_boundaries:
+  description: "事务边界定义，确保数据一致性"
+  
+  boundaries:
+    - name: "CreateTransaction"
+      description: "创建交易 + 更新持仓"
+      tables:
+        - "t_fv_core_transactions"
+        - "t_fv_core_holdings"
+        - "t_fv_core_cost_lots（FIFO 时）"
+      
+    - name: "CashLink"
+      description: "现金联动的两笔 Transaction"
+      tables:
+        - "t_fv_core_transactions（资产交易）"
+        - "t_fv_core_transactions（现金交易）"
+        - "t_fv_core_holdings（资产持仓）"
+        - "t_fv_core_holdings（现金持仓）"
+      
+    - name: "MatureWealth"
+      description: "理财到期自动处理"
+      tables:
+        - "t_fv_core_transactions"
+        - "t_fv_core_holdings"
+      
+    - name: "RecalculateHolding"
+      description: "按 Transaction 重新计算 Holding"
+      tables:
+        - "t_fv_core_holdings"
+        - "t_fv_core_cost_lots"
 
-  /ai/advisor/recommend:
-    post:
-      summary: 一次性买卖/持仓建议（含 Tool Calling 循环，非流式）
-      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [target]
-              properties:
-                target: { type: string, enum: [buy_sell, allocation], description: "建议类型" }
-                asset_id: { type: integer, nullable: true }
-                llm_provider: { type: string, nullable: true }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
+# ==============
+# 14. 错误处理规范
+# ==============
+error_handling:
+  description: "错误处理规范，定义在 pkg/errs/ 包"
+  
+  principles:
+    - "业务错误统一走 pkg/errs，未直接返回 errors.New(...)"
+    - "错误链使用 fmt.Errorf(\"...: %w\", err) 包裹，未丢失底层 cause"
+    - "handler 层将 *errs.AppError 映射到 HTTP 状态码与统一响应结构"
+  
+  error_codes:
+    ranges:
+      - range: "10000-19999"
+        usage: "通用（参数、未授权、未找到）"
+        examples:
+          - code: 10001
+            name: "InvalidParam"
+          - code: 10404
+            name: "NotFound"
+      
+      - range: "20000-29999"
+        usage: "user / dict 模块"
+      
+      - range: "30000-39999"
+        usage: "core 模块"
+        examples:
+          - code: 30001
+            name: "AssetCodeDuplicated"
+          - code: 30010
+            name: "HoldingQuantityNotEnough"
+      
+      - range: "40000-49999"
+        usage: "quote 模块"
+      
+      - range: "50000-59999"
+        usage: "ai 模块"
+        examples:
+          - code: 50001
+            name: "LLMProviderUnavailable"
+      
+      - range: "60000-69999"
+        usage: "report 模块"
+      
+      - range: "90000-99999"
+        usage: "系统级（DB / Cache / 第三方）"
 
-  /ai/analysis/profit:
-    post:
-      summary: 盈亏分析（Tool Calling 循环）
-      parameters: [{$ref: "#/components/parameters/UserIdHeader"}]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                period: { type: string, example: "2026-Q1" }
-                display_currency: { type: string, default: CNY }
-                llm_provider: { type: string, nullable: true }
-      responses:
-        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Resp" } } } }
-
-  # ============================================================
-  # 导出
-  # ============================================================
-  /export:
-    get:
-      summary: 数据导出（Excel / Markdown）
-      parameters:
-        - {$ref: "#/components/parameters/UserIdHeader"}
-        - { name: format, in: query, required: true, schema: { type: string, enum: [xlsx, md] } }
-        - { name: scope,  in: query, required: true, schema: { type: string, enum: [holdings, transactions, full] } }
-        - { name: start, in: query, schema: { type: string, format: date } }
-        - { name: end,   in: query, schema: { type: string, format: date } }
-      responses:
-        "200":
-          description: 文件流
-          content:
-            application/octet-stream:
-              schema: { type: string, format: binary }
-
-# ============================================================
-# 错误码
-# ============================================================
-x-error-codes:
-  "0":      OK
-  "10001":  INVALID_PARAM        # 通用参数错误
-  "10002":  NOT_FOUND
-  "10003":  CONFLICT
-  "10004":  PERMISSION_DENIED
-  "20001":  USER_NOT_FOUND
-  "30001":  ASSET_NOT_FOUND
-  "30002":  HOLDING_NOT_FOUND
-  "30003":  INSUFFICIENT_QUANTITY      # 卖出量超过持仓
-  "30004":  DUPLICATE_TRANSACTION       # external_id 防重
-  "30005":  INVALID_CASH_CODE           # 现金 code 格式不符
-  "30006":  MISSING_WEALTH_DETAIL       # 理财必须 wealth_detail
-  "40001":  QUOTE_FETCH_FAILED          # 第三方行情接口失败
-  "40002":  MISSING_EXCHANGE_RATE       # 折算时无可用汇率
-  "50001":  LLM_PROVIDER_NOT_FOUND
-  "50002":  LLM_TOOL_HOPS_EXCEEDED      # Tool 循环超上限
-  "50003":  LLM_UPSTREAM_ERROR
-  "90001":  INTERNAL_ERROR              # panic 兜底
-  "90002":  DB_ERROR
-  "90003":  CRON_ERROR
+# ==============
+# 15. 命名规范摘要
+# ==============
+naming_conventions:
+  description: "命名规范摘要，完整规范见 naming-conventions skill"
+  
+  database:
+    table: "t_fv_{module}_{name}（全小写复数）"
+    field: "f_" 前缀 + 全小写下划线"
+    primary_key: "f_id（bigint unsigned）"
+    foreign_key: "f_{表名}_id"
+    unique_index: "uk_{字段简写}（不带模块前缀）"
+    normal_index: "idx_{字段简写}"
+  
+  go_identifiers:
+    package: "全小写、单数、无下划线（如 asset / holding）"
+    interface: "XxxRepository / XxxService / XxxProvider"
+    struct: "小写驼峰（包内私有，如 assetRepo）"
+    constructor: "NewXxx 返回接口而非 struct"
+    error_var: "Err 前缀 + 大驼峰（如 ErrAssetNotFound）"
+    error_code: "ErrCodeXxx 大驼峰"
+    enum: "Type 前缀大驼峰（如 TxnTypeBuy）"
+  
+  api_path:
+    pattern: "/api/v{N}/{resource}（资源名全小写复数）"
+    example: "GET /assets / GET /assets/:id"

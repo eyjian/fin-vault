@@ -2,10 +2,13 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 
-	"github.com/eyjian/fin-vault/backend/internal/llm"
+	sdktool "trpc.group/trpc-go/trpc-agent-go/tool"
+	sdkfunction "trpc.group/trpc-go/trpc-agent-go/tool/function"
+
 	"github.com/eyjian/fin-vault/backend/internal/repository"
+	"github.com/eyjian/fin-vault/backend/pkg/errs"
 )
 
 // MarketDataDeps 行情查询工具依赖。
@@ -14,12 +17,28 @@ type MarketDataDeps struct {
 	Asset repository.AssetRepository
 }
 
-type marketDataArgs struct {
-	UserID   uint   `json:"user_id"`
-	AssetIDs []uint `json:"asset_ids"`
+// MarketDataArgs LLM 传入参数。
+//
+// 设计要点（D13 规则 1）：market_data 涉用户数据（按 user_id 查 asset 详情拼 code/name），
+// 入参 schema **不**含 user_id 字段——身份从 ctx 提取。
+//
+// 注：market_data 与 search_fund 的差别：
+//   - search_fund 是公共数据查询（按 keyword 模糊匹配全库基金），不需要 D13 隔离
+//   - market_data 在拿到行情后会调 AssetRepository.GetByID(ctx, userID, id) 拼 code/name；
+//     该接口对 userID=0 的行为是"返回 nil"——这意味着如果不强制 ctx 注入，结果会丢失 asset 元信息
+//     （旧版 user_id==0 默认 1 兜底掩盖了这个语义；本次改造遵循 D13 严格 ctx 注入）
+type MarketDataArgs struct {
+	AssetIDs []uint `json:"asset_ids" jsonschema:"description=要查询的资产 ID 列表（必填，至少一个）,required"`
 }
 
-type marketDataItem struct {
+// MarketDataOutput LLM 可见的返回。
+type MarketDataOutput struct {
+	Items []MarketDataItem `json:"items" jsonschema:"description=行情快照列表"`
+	Count int              `json:"count" jsonschema:"description=条数"`
+}
+
+// MarketDataItem 单条行情快照。decimal 字段用 string 序列化（铁律 F1）。
+type MarketDataItem struct {
 	AssetID   uint   `json:"asset_id"`
 	AssetCode string `json:"asset_code,omitempty"`
 	AssetName string `json:"asset_name,omitempty"`
@@ -29,60 +48,47 @@ type marketDataItem struct {
 	Source    string `json:"source,omitempty"`
 }
 
-// NewMarketDataTool 行情查询工具：批量按 asset_ids 取最新价。
-func NewMarketDataTool(deps MarketDataDeps) llm.Tool {
-	return llm.Tool{
-		Name:        "market_data",
-		Description: "批量查询资产的最新价格/净值快照（PriceQuote）。需要传入 asset_ids 数组。",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"user_id": map[string]any{"type": "integer", "description": "默认 1"},
-				"asset_ids": map[string]any{
-					"type":        "array",
-					"items":       map[string]any{"type": "integer"},
-					"description": "要查询的资产 ID 列表",
-				},
-			},
-			"required": []string{"asset_ids"},
-		},
-		Handler: func(ctx context.Context, raw string) (string, error) {
-			var a marketDataArgs
-			if err := llm.SafeUnmarshalArgs(raw, &a); err != nil {
-				return errString("invalid args", err), nil
+// NewMarketDataTool 构造 market_data 工具：批量按 asset_ids 取最新行情。
+//
+// D13 强制约束：身份从 ctx 提取（用于拼 asset code/name 时的归属校验），
+// 提取失败立即返错，禁止任何兜底。
+func NewMarketDataTool(deps MarketDataDeps) sdktool.CallableTool {
+	return sdkfunction.NewFunctionTool(
+		func(ctx context.Context, args MarketDataArgs) (MarketDataOutput, error) {
+			uid, ok := UserIDFromContext(ctx)
+			if !ok {
+				return MarketDataOutput{}, fmt.Errorf("user_id not in context: %w", errs.ErrAIToolCallFailed)
 			}
-			if a.UserID == 0 {
-				a.UserID = 1
+			if len(args.AssetIDs) == 0 {
+				return MarketDataOutput{Items: []MarketDataItem{}, Count: 0}, nil
 			}
-			if len(a.AssetIDs) == 0 {
-				b, _ := json.Marshal(map[string]any{"items": []any{}, "count": 0})
-				return string(b), nil
-			}
-			quotes, err := deps.Quote.BatchGetLatest(ctx, a.AssetIDs)
+			quotes, err := deps.Quote.BatchGetLatest(ctx, args.AssetIDs)
 			if err != nil {
-				return errString("get latest batch failed", err), nil
+				return MarketDataOutput{}, fmt.Errorf("get latest batch failed: %w", err)
 			}
-			out := make([]marketDataItem, 0, len(a.AssetIDs))
-			for _, id := range a.AssetIDs {
-				q, ok := quotes[id]
-				if !ok || q == nil {
+			items := make([]MarketDataItem, 0, len(args.AssetIDs))
+			for _, id := range args.AssetIDs {
+				q, qok := quotes[id]
+				if !qok || q == nil {
 					continue
 				}
-				item := marketDataItem{
+				item := MarketDataItem{
 					AssetID:   id,
 					Price:     q.Price.String(),
 					ChangePct: q.ChangePct.String(),
 					QuoteTime: q.QuoteTime.Format("2006-01-02 15:04:05"),
 					Source:    q.Source,
 				}
-				if asset, _ := deps.Asset.GetByID(ctx, a.UserID, id); asset != nil {
+				// 拼 asset 元信息：必须使用 ctx 注入的 uid，而非 0 兜底（D13 + 防越权）
+				if asset, _ := deps.Asset.GetByID(ctx, uid, id); asset != nil {
 					item.AssetCode = asset.AssetCode
 					item.AssetName = asset.Name
 				}
-				out = append(out, item)
+				items = append(items, item)
 			}
-			b, _ := json.Marshal(map[string]any{"items": out, "count": len(out)})
-			return string(b), nil
+			return MarketDataOutput{Items: items, Count: len(items)}, nil
 		},
-	}
+		sdkfunction.WithName("market_data"),
+		sdkfunction.WithDescription("批量查询当前用户名下资产的最新价格/净值快照（PriceQuote）。需要传入 asset_ids 数组（至少一个）。返回 items[]{asset_id,asset_code,asset_name,price,change_pct,quote_time,source}。用户身份从 ctx 自动注入，不接受 user_id 参数。"),
+	)
 }

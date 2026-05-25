@@ -1,0 +1,120 @@
+## 1. 准备与依赖
+
+- [x] 1.1 在 `backend/go.mod` 添加 `trpc.group/trpc-go/trpc-agent-go@v1.9.1`，`go mod tidy` 通过
+- [x] 1.2 在 `backend/configs/config.yaml` 增加 `ai.session.max_steps_size_mb`（默认 100）、`ai.session.history_window`（默认 20）
+- [x] 1.3 在 `backend/internal/bootstrap/config.go` 注册新配置项的默认值与校验
+- [x] 1.4 拉一个独立分支 `feature/replace-ai-with-trpc-agent-go` 并推送
+
+## 2. 数据模型 & migration
+
+> **机制说明**：项目使用 GORM AutoMigrate（`backend/internal/repository/gorm/automigrate.go`），无 SQL 迁移文件机制。本议题"建表"= 新增 domain struct + 加入 AutoMigrate 列表；"删表"= 删除 domain struct + 从 AutoMigrate 列表移除（不需要 DROP TABLE 脚本，按 design.md "Migration Plan" 第 5 条本议题不做向下兼容）。
+>
+> **范围说明**：本议题用户已确认无老 AI 数据需要兼容，故 §2 阶段同时完成"建新 AI 三表"与"删旧 AI 模块（AIConversation / AIMessage 及其 service / handler / wire）"，让出 `t_fv_ai_messages` 表名给新 `Message` 实体，避免命名冲突。原议题 §6/§7 中相关删除子项已合并到此处，不重复执行。
+
+### 建新
+
+- [x] 2.1 在 `backend/internal/domain/` 新增 `Session` / `Message` / `AgentStep` 三个 struct（均不继承 `BaseModel`，因主键为 UUID 字符串列；按 naming-conventions skill 规范：每个字段显式 `column:` tag、显式实现 `TableName()`，详见 design.md D9）
+- [x] 2.2 在 `backend/internal/repository/gorm/automigrate.go` 的 AutoMigrate 列表追加 `*domain.Session`（建表 `t_fv_ai_sessions`：`f_id` varchar(36) PK / `f_user_id` / `f_title` / `f_created_at` / `f_updated_at` + 索引 `idx_user_updated(f_user_id,f_updated_at)`）
+- [x] 2.3 同列表追加 `*domain.Message`（建表 `t_fv_ai_messages`：`f_id` / `f_session_id` FK→`t_fv_ai_sessions.f_id` / `f_role` / `f_content` / `f_token_usage` JSON / `f_created_at` + 索引 `idx_session_created(f_session_id,f_created_at)`）
+- [x] 2.4 同列表追加 `*domain.AgentStep`（建表 `t_fv_ai_agent_steps`：`f_id` / `f_session_id` FK→`t_fv_ai_sessions.f_id` / `f_message_id` FK→`t_fv_ai_messages.f_id` / `f_event_type` / `f_tool_name` / `f_payload` JSON / `f_created_at` + 索引 `idx_step_session_created(f_session_id,f_created_at)`、`idx_created`；注：与 §2.3 的 `idx_session_created` 区分，因 SQLite 索引名为库级命名空间，跨表不能同名）
+- [x] 2.5 本地启动 `go run ./cmd/finvault` 触发 AutoMigrate，用 `sqlite3 data/finvault.db ".schema t_fv_ai_sessions"` / `".schema t_fv_ai_messages"` / `".schema t_fv_ai_agent_steps"` 核对字段类型、索引、外键完整
+
+### 删旧（本议题用户已确认无老 AI 数据需要兼容）
+
+- [x] 2.6 在 `backend/internal/domain/ai_report.go` 中**精确删除** `AIConversation` 与 `AIMessage` 两个 struct 及其 `TableName()` 方法（保留同文件内的 `Report` struct！建议拆分文件：旧 AI 部分整体删除，`Report` 留在原文件或挪到 `ai_report.go` 重命名为 `report.go`，dev 自决最干净的拆法）
+- [x] 2.7 删除 `backend/internal/repository/gorm/ai_chat_repo.go`（一体仓储实现）；从 `backend/internal/repository/gorm/automigrate.go` 移除 `&domain.AIConversation{}` / `&domain.AIMessage{}` 两个 entry；删除 `backend/internal/repository/interfaces.go` 中 `AIConversationRepository` 接口与 `Repos.AIConversation` 字段；同步从 `backend/internal/testutil/mock_repos.go` 删除 `MockAIConversationRepo` 整段
+- [x] 2.8 删除 `backend/internal/service/chat_service.go` / `advisor_service.go` / `analysis_service.go` / `ai_services_test.go` 四个文件（确认这三个 service 仅承载旧 AI 逻辑，不含可独立保留的非 AI 业务；如发现可独立保留逻辑，**先回报架构师**，不擅自决策）
+- [x] 2.9 删除 `backend/internal/handler/chat_handler.go` / `advisor_handler.go` / `analysis_handler.go` 三个 handler；从 `backend/internal/bootstrap/wire.go` 删除 `Chat` / `Advisor` / `Analysis` handler 字段、`chatSvc` / `advisorSvc` / `analysisSvc` 三处装配、`repos.AIConversation` 注入、以及 router 上 `/api/v1/ai/chat` 等旧 AI 路由（保留 `AIMeta` handler 与 `GET /api/v1/ai/providers` 类元信息接口，那是新 AI 仍要用的）
+
+### 收尾
+
+- [x] 2.10 `go vet ./...` + `go build ./...` + `go test ./...` 全绿；`pkg/errs/errs.go` 中 `ErrAIConversationNotFound`（错误码 50001）暂不删，留至 §7.1 自研 Provider 退场时一并评估；`pkg/utils/response/response.go` 引用同步处理
+
+## 3. 包结构 & 接口抽象
+
+- [x] 3.1 新建目录 `backend/internal/llm/agent/`、`model/`、`session/`，按 design D8 落地
+- [x] 3.1.1 删除 backend/internal/llm/trpc_agent_placeholder.go（§1.1 临时占位文件，§3 真实代码 import trpc-agent-go 子包后失去作用）
+- [x] 3.2 在 `agent/runner.go` 定义业务侧 `Runner` 接口：`Run(ctx, sessionID, userMsg) (assistantMsg, []ToolCall, TokenUsage, error)`
+- [x] 3.3 在 `session/store.go` 定义 `SessionStore` 接口（CRUD + ListMessages + AppendMessage + AppendStep + EstimateStepsSize）
+- [x] 3.4 在 `session/cache.go` 定义 `Cache` 接口与 `NoopCache` 默认实现（预留 Redis 接入点）
+- [x] 3.5 跑 `go build ./...` 确保骨架可编译
+
+## 4. SQLite 持久化实现
+
+- [x] 4.1 实现 `session/sqlite_store.go`：会话 CRUD + 仅返回 `user_id` 匹配的会话
+- [x] 4.2 实现 `AppendMessage` 与按 `history_window` 拉最近 N 条消息
+- [x] 4.3 实现 `AppendStep`：写 `ai_agent_steps` 一行，`payload` JSON 序列化前对敏感字段掩码
+- [x] 4.4 实现 `EstimateStepsSize`：用 SQLite `pragma page_count * page_size` 估算
+- [x] 4.5 实现 `session/cleanup.go`：当估算 > `max_steps_size_mb` 时按 `created_at ASC` 删旧 step；`max_steps_size_mb=0` 时整体跳过
+- [x] 4.6 单测：`sqlite_store_test.go` 覆盖 CRUD、用户隔离、history_window、清理边界 0、清理触发等场景
+
+## 5. trpc-agent-go 适配
+
+- [x] 5.0 在 `pkg/errs/errs.go` 新增 `ErrAIProviderRateLimited`（50006）/ `ErrAIToolNotFound`（50007）两个错误码（已先期完成于 Step 5-pre commit；dev 在 §5.4 错误映射时直接复用，不重做）
+- [x] 5.1 实现 `model/factory.go`：按 `llm.providers.<name>` 配置生成 OpenAI 兼容 Model；`llm.default` 不可用时按字典序 fallback 并记录 warn 日志
+- [x] 5.2 实现 `agent/runner_trpc.go`：包装 trpc-agent-go 的 Runner / Session / Tool，实现 `Runner` 接口
+- [x] 5.3 把所有 step 事件（tool_call_started / tool_call_finished / token_usage / step_boundary）通过 `SessionStore.AppendStep` 落库
+- [x] 5.4 错误映射：把上游 4xx/5xx、工具 panic、未知工具映射为 `AI_PROVIDER_*` / `AI_TOOL_*` 业务错误码
+- [x] 5.5 单测：mock trpc-agent-go 客户端，覆盖正常/限流/工具失败/未知工具四种路径
+
+## 6. 工具改造
+
+- [x] 6.0 在 `backend/internal/llm/tools/context.go` 定义 unexported ctxKey + 导出 `WithUserID(ctx, uint) context.Context` 与 `UserIDFromContext(ctx) (uint, bool)` 两个 helper（用于工具内部强制隔离用户身份；service 层注入；详见 design.md D13）
+- [x] 6.1 删除 `backend/internal/llm/tools/registry.go`、`util.go`（中心化注册表不再需要）
+- [x] 6.2 改造 `history_query.go` 适配 trpc-agent-go `tool.Tool` 接口，参数结构体 + json/description tag
+- [x] 6.3 改造 `holding_query.go`，`Run` 内强制按当前 `user_id` 过滤
+- [x] 6.4 改造 `profit_calc.go` / `platform_summary.go` / `market_data.go`（三个只读查询工具同类改造）
+- [x] 6.5 新增 `search_fund.go`：按 `keyword` 模糊匹配 `code`/`name`，结果上限 20
+- [x] 6.6 新增 `market_quote.go`：按 `symbol`（如 `sh000001`）查上证指数等行情
+- [x] 6.7 在 `agent/runner_trpc.go` 启动时把所有工具自动注册到 Runner，并打印工具清单日志
+- [x] 6.8 工具单测：每个工具一份 `*_test.go`，含成功 + 失败 + 脱敏三类用例
+
+## 7. Service 层
+
+> **范围调整**：旧 ChatService / AdvisorService / AnalysisService（基于自研 Provider）已在 §2.8 删除，本节剩"类型搬迁 + 自研 Provider 文件退场 + 错误码清理 + AIMetaHandler 改造 + 新 Service 新建 + §5 step.MessageID 关联补漏"共 7 子项。
+
+- [x] 7.0 在 `backend/internal/llm/model/types.go` 搬迁 `RegistryConfig` / `ProviderConfig` 类型（与 dev_2 §5.1 已搬的 `RegistryEntry` / `ProviderEntry` 同一文件聚合）；同步把 `backend/internal/bootstrap/config.go` 的 `Config.LLM` 类型从 `llm.RegistryConfig` 改为 `model.RegistryEntry`（viper mapstructure tag 不变；setDefaults / 校验逻辑保持现状）
+- [x] 7.1 删除 `backend/internal/llm/openai_provider.go` / `provider.go` / `fake_provider.go` / `registry.go` / `registry_test.go` / `config.go`（自研 Provider 整体退场）；同步在 `pkg/errs/errs.go` 删除 `ErrAIProviderNotFound`（50002）/ `ErrAIProviderDisabled`（50003）（grep 验证 0 引用），改名 `ErrAIConversationNotFound` → `ErrAISessionNotFound`（50001 message 同步改为 `"session not found"`，全仓 24 处引用一并替换）；改造 `backend/internal/handler/ai_meta_handler.go` 直接消费 `cfg.LLM.Providers` 列出 provider names + enabled 状态（保留 `/api/v1/ai/providers` 路由），无 `Registry` 抽象；摘除 `bootstrap/wire.go` 中 `llm.Registry` 装配段（L70-82）+ `App.LLMRegistry` 字段；以上为单原子 commit 保证 build 通过
+- [x] 7.2 新建 `backend/internal/service/ai_session_service.go`（会话 CRUD：Create / Get / Update / Delete / List；强制按 ctx 提取的 userID 校验归属；不归属返 `ErrAISessionNotFound`（50001）不暴露存在性，对应 spec ai-session "拒绝删除他人会话 404 不暴露存在性"）
+- [x] 7.3 新建 `backend/internal/service/ai_message_service.go`（调业务 `Runner.Run`，落 user/assistant 消息归 Runner 内部按 D12 五步约束，service 不重复落 user/assistant message；调 `Runner.Run` 之前必须双 ctx 注入：`tools.WithUserID(ctx, uid)` + `agent.WithUserID(ctx, fmt.Sprint(uid))`；按 D14 规则预生成 `assistantMessageID = uuid.NewString()` 并通过 `agent.WithAssistantMessageID(ctx, msgID)` 注入；调 Runner 之前先 `aiSessionSvc.Get` 校验 sessionID 归属当前 user）
+- [x] 7.4 在 service 层禁止 import `trpc-agent-go` SDK（grep 把关：`grep -rn "trpc.group/trpc-go/trpc-agent-go" backend/internal/service/` 必须 0 命中；service 通过 import `internal/llm/agent` + `internal/llm/tools` 业务包间接使用 SDK 能力，符合 D12）
+- [x] 7.5 service 单测：用 mock Runner（手写 fake，与 §5 testhelpers_test.go 模式一致）+ in-memory `session.SessionStore`（复用 §4 `sqlite_store.go` + `:memory:` SQLite）；关键用例含跨用户隔离回归（`Test_*_OtherUser_Returns404Like`）+ 双 ctx 注入断言（fake Runner 内 inspect ctx）+ Runner 错误码透传 + ToolCalls 关联
+- [x] 7.6 补 §5 设计遗漏（详见 design.md D14）：在 `backend/internal/llm/agent/` 新增 `WithAssistantMessageID(ctx, msgID) ctx` 与 `assistantMessageIDFromCtx(ctx) (string, bool)` helper（unexported ctxKey）；扩展 `event_handler.appendStepSafe` 签名加 `messageID string` 参数（5 处调用站点同步更新；从 ctx 提取失败降级为空串 + warn 日志，不阻塞）；`runner_trpc.go` 内 assistant message 写入时使用同一 messageID（保证 `step.MessageID` 与 `assistant_message.ID` 一致）；同时补 §5 tester 漏检：在 §7.5 单测中加 `Test_AppendStep_LinkedToAssistantMessageID` 回归用例
+
+## 8. Handler & 路由
+
+> **范围调整**：旧 `chat_handler.go` / `advisor_handler.go` / `analysis_handler.go` 与 `/api/v1/ai/chat` 等旧路由已在 §2.9 删除，本节只新增。
+
+- [x] 8.1 新增 `handler/ai_session_handler.go`：`POST /api/v1/ai/sessions`（201 Created，响应字段名 `session_id`）、`GET /api/v1/ai/sessions`（分页列表）、`GET /api/v1/ai/sessions/{id}`、`PUT /api/v1/ai/sessions/{id}`（更新 title，service.Update 已实现，spec ai-session 未禁用）、`DELETE /api/v1/ai/sessions/{id}`（**204 No Content**，spec §38-42 强制）、`GET /api/v1/ai/sessions/{id}/messages`（按 created_at 升序，仅 user/assistant 两 role）
+- [x] 8.2 新增 `handler/ai_message_handler.go`：`POST /api/v1/ai/sessions/{id}/messages`，响应体含 `assistant_message` + `tool_calls` 数组 + `token_usage`（spec ai-tools §53-57：失败的工具调用也必须出现在数组中）
+- [x] 8.3 `GET /api/v1/ai/providers`：dev_2 §7.1 改造的 `AIMetaHandler` 已提供该路由（直接消费 `model.RegistryConfig`，含 `Enabled` 字段），本节无新增工作量
+- [x] 8.4 AI 路由 `X-User-Id` Header 强校验：缺失或非法（含 0）即返 `401 Unauthorized`（不走 `userIDFromHeader` 的 fallback=1 路径，spec ai-session §13-17 "未登录用户被拒绝"），新增 handler 包内 `requireUserIDFromHeader(c) (uint, bool)` helper；二阶段切 JWT 时同步升级该 helper（详见 design.md D15）
+- [x] 8.5 e2e：用 `httptest` 走通核心流程
+  - [x] 8.5a 本期（mock Runner）：建会话 → 列表 → 发消息（fake Runner 验证双 ctx + 第三注入）→ 删会话 → 列表为空；4xx 路径覆盖（401 缺 X-User-Id / 404 跨用户 / 400 空 body）
+  - [ ] 8.5b 留 §10：在 §9 完成 Runner 装配后扩成完整 5 步（建会话 → 多轮 → search_fund → market_quote → 删会话）
+- [x] 8.6 wire.go 装配：`AISessionHandler` 始终装配（不依赖 Runner）；`AIMessageHandler` 条件装配——`agent.Runner` 在 §9 装配前为 nil，本期 `RegisterRoutes` 内仅当 `h.AIMessage != nil` 时才挂 `POST /sessions/:id/messages`，启动日志 Warn "AI message endpoint disabled until Runner wiring (§9)"
+
+## 9. Bootstrap & 装配
+
+- [x] 9.1 在 `internal/bootstrap/` 装配单例 SessionStore + Runner + AISessionService + AIMessageService → 接入 wire.go：
+  - [x] 9.1a 新建 `bootstrap/wire_ai.go`：`buildAITools(repos)` 聚合 7 工具（search_fund / market_quote / market_data / holding_query / profit_calc / platform_summary / history_query）+ `wireAI(...)` 完成完整装配链
+  - [x] 9.1b 改 `bootstrap/wire.go` 移除 §8 placeholder（L125-141 段），调用 wireAI 装配 `handlers.AISession` / `handlers.AIMessage`
+  - [x] 9.1c **D16 LLM 不可用降级**（详见 design.md D16）：`model.NewDefaultModel` 返 error 时 → AISession 仍装（CRUD 不依赖 Runner）+ AIMessage 保持 nil（POST send 自动 404）+ slog.Warn 含降级原因；与现有 "no llm providers configured" 告警对齐
+  - [x] 9.1d default instruction 本期硬编码（"你是 fin-vault 个人理财助手，回答必须基于工具返回的真实数据，不臆测。"）；后续可加 `cfg.AI.Instruction` 覆盖（留 §10 follow-up）
+- [x] 9.2 启动日志补齐（spec ai-agent-runtime "工具清单启动可见"）：
+  - [x] 9.2a `llm provider selected (default)` 或 fallback 日志（**已在 model.NewDefaultModel 实装**）
+  - [x] 9.2b `llm tools registered` 日志（**已在 NewToolsetAgentFactory 实装**：tools[] / count / max_tool_iterations / app_name）
+  - [x] 9.2c **新增** `ai providers loaded` 日志（wireAI 装配前打）：configured 名单 / default
+  - [x] 9.2d **新增** `ai session config` 日志（wireAI 完成后打）：history_window / max_steps_size_mb
+  - [x] 9.2e **新增** `ai endpoints status` 日志（wireAI 完成后打）：session_enabled / message_enabled，降级时含 reason
+- [x] 9.3 评估 in-flight step flush：当前 `appendStepSafe` 同步落库无内部缓冲（§5 实装时已绕过），严格意义无 in-flight step 需要 flush；本期**不实装** flush 接口，commit body + design.md 备注解释；HTTP server 10s graceful shutdown（main.go 已有）保留不变；如未来 Runner 引入异步 step 缓冲再补——留 §10 follow-up
+
+## 10. 验收 & 收尾
+
+- [x] 10.1 `go vet ./...` + `go build ./...` + 全部单测通过
+- [ ] 10.2 本地手工 e2e 走通 5 个核心场景
+- [x] 10.3 跑 `openspec validate replace-ai-with-trpc-agent-go --strict` 通过
+- [x] 10.4 更新 [docs/architecture-design.md](../../../docs/architecture-design.md)：AI 模块章节改为 trpc-agent-go 描述
+- [x] 10.5 更新 [docs/database-schema.md](../../../docs/database-schema.md)：补 3 张新表
+- [x] 10.6 PR 描述链回本议题路径 `openspec/changes/replace-ai-with-trpc-agent-go/`
+- [ ] 10.7 合并后执行 `openspec archive replace-ai-with-trpc-agent-go`

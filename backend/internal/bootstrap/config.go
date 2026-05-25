@@ -20,23 +20,25 @@ import (
 
 	"github.com/spf13/viper"
 
-	"github.com/eyjian/fin-vault/backend/internal/llm"
+	"github.com/eyjian/fin-vault/backend/internal/llm/model"
 )
 
 // Config 是 FinVault 后端的强类型配置。
 //
 // 加载流程：viper 仅在 LoadConfig 调用一次；其余模块通过本结构体取值，禁止再读 viper。
 type Config struct {
-	Server   ServerConfig       `mapstructure:"server"`
-	Database DatabaseConfig     `mapstructure:"database"`
-	Cache    CacheConfig        `mapstructure:"cache"`
-	Log      LogConfig          `mapstructure:"log"`
-	Auth     AuthConfig         `mapstructure:"auth"`
-	Security SecurityConfig     `mapstructure:"security"`
-	LLM      llm.RegistryConfig `mapstructure:"llm"`
-	Quote    QuoteConfig        `mapstructure:"quote"`
-	Cron     CronConfig         `mapstructure:"cron"`
-	JWT      JWTConfig          `mapstructure:"jwt"`
+	Server        ServerConfig         `mapstructure:"server"`
+	Database      DatabaseConfig       `mapstructure:"database"`
+	Cache         CacheConfig          `mapstructure:"cache"`
+	Log           LogConfig            `mapstructure:"log"`
+	Auth          AuthConfig           `mapstructure:"auth"`
+	Security      SecurityConfig       `mapstructure:"security"`
+	LLM           model.RegistryConfig `mapstructure:"llm"`
+	AI            AIConfig             `mapstructure:"ai"`
+	Quote         QuoteConfig          `mapstructure:"quote"`
+	DataProviders DataProvidersConfig  `mapstructure:"data_providers"`
+	Cron          CronConfig           `mapstructure:"cron"`
+	JWT           JWTConfig            `mapstructure:"jwt"`
 }
 
 // ServerConfig HTTP 服务配置。
@@ -104,6 +106,32 @@ type SecurityConfig struct {
 	EncryptionKey string `mapstructure:"encryption_key"`
 }
 
+// AIConfig AI 模块配置（基于 trpc-agent-go 的会话与运行时）。
+//
+// LLMConfig（多 Provider 路由）由 internal/llm/model 包内的 RegistryConfig 提供，
+// 这里只承载 trpc-agent-go 引入后新增的会话/运行时层配置项。
+type AIConfig struct {
+	Session        SessionConfig        `mapstructure:"session"`
+	PulseDiagnosis PulseDiagnosisConfig `mapstructure:"pulse_diagnosis"`
+}
+
+// SessionConfig AI 会话相关配置。
+//
+//   - MaxStepsSizeMB：ai_agent_steps 表大小估算上限（MB），0 = 不清理。
+//   - HistoryWindow ：单次推理拼接的历史消息条数上限，必须 > 0。
+type SessionConfig struct {
+	MaxStepsSizeMB int `mapstructure:"max_steps_size_mb"`
+	HistoryWindow  int `mapstructure:"history_window"`
+}
+
+// PulseDiagnosisConfig AI 把脉相关配置（spec ai-pulse-diagnosis "批量并行化"）。
+//
+//   - Concurrency ：REST API 批量把脉的并发度（errgroup 信号量），默认 3。
+//     过大会触达 LLM 提供方 RPM 限制；过小会导致总耗时偏长。
+type PulseDiagnosisConfig struct {
+	Concurrency int `mapstructure:"concurrency"`
+}
+
 // QuoteConfig 行情拉取配置。
 type QuoteConfig struct {
 	SourcePriority []string      `mapstructure:"source_priority"` // ["api_eastmoney","api_sina","api_tencent"]
@@ -125,11 +153,36 @@ type JWTConfig struct {
 	Expire time.Duration `mapstructure:"expire"`
 }
 
+// DataProvidersConfig 多 API 服务商配置（用于基金净值等数据获取）。
+//
+// 设计原则：
+//   - 每个服务商独立配置 token / base_url / enabled；
+//   - 支持多个服务商并行注册，由 service 层按优先级尝试；
+//   - token 通过环境变量注入，避免提交到仓库。
+type DataProvidersConfig struct {
+	Tushare TushareConfig `mapstructure:"tushare"`
+	// 未来可扩展：AKShare AKShareConfig `mapstructure:"akshare"`
+}
+
+// TushareConfig Tushare Pro API 配置。
+//
+// Tushare Pro 是一个免费的金融数据接口，注册后赠送 200 积分，
+// 基金净值接口（fund_nav）需 120 积分，完全覆盖。
+//
+// 接口文档：https://tushare.pro/document/2?doc_id=119
+type TushareConfig struct {
+	Enabled bool   `mapstructure:"enabled"`
+	Token   string `mapstructure:"token"`    // Tushare API token，从环境变量 FINVAULT_DATA_PROVIDERS_TUSHARE_TOKEN 读取
+	BaseURL string `mapstructure:"base_url"` // 默认 https://api.tushare.pro
+}
+
 // LoadConfig 从指定 yaml 文件加载配置（**整个进程唯一一次** viper 调用）。
 //
 // 同时支持环境变量覆盖：FINVAULT_DATABASE_DSN 等，分隔符 _。
 // yaml 中 ${ENV_VAR:default} 形式的占位符会被自动展开。
 func LoadConfig(path string) (*Config, error) {
+	configPath = path // 记录路径，供 SaveConfig 回写
+
 	v := viper.New()
 	v.SetConfigFile(path)
 	v.SetConfigType("yaml")
@@ -178,6 +231,24 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.Auth.DefaultUserID = 1
 	}
 
+	// AI 会话配置校验：max_steps_size_mb 允许 0（=不清理），不允许负值；
+	// history_window 必须 > 0，避免推理时拼不到历史消息。
+	if cfg.AI.Session.MaxStepsSizeMB < 0 {
+		return nil, fmt.Errorf("ai.session.max_steps_size_mb must be >= 0, got %d", cfg.AI.Session.MaxStepsSizeMB)
+	}
+	if cfg.AI.Session.HistoryWindow <= 0 {
+		return nil, fmt.Errorf("ai.session.history_window must be > 0, got %d", cfg.AI.Session.HistoryWindow)
+	}
+
+	// AI 把脉并发度（spec ai-pulse-diagnosis "批量并行化"）：未配置或非法值时默认 3。
+	if cfg.AI.PulseDiagnosis.Concurrency <= 0 {
+		cfg.AI.PulseDiagnosis.Concurrency = 3
+	}
+	if cfg.AI.PulseDiagnosis.Concurrency > 20 {
+		// 上限保护：避免一次发起过多并发请求触达 LLM 提供方 RPM 限制
+		cfg.AI.PulseDiagnosis.Concurrency = 20
+	}
+
 	return cfg, nil
 }
 
@@ -214,6 +285,9 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("llm.default", "deepseek")
 
+	v.SetDefault("ai.session.max_steps_size_mb", 100)
+	v.SetDefault("ai.session.history_window", 20)
+
 	v.SetDefault("quote.source_priority", []string{"api_eastmoney", "api_sina", "api_tencent"})
 	v.SetDefault("quote.http_timeout_sec", 5)
 	v.SetDefault("quote.cache_ttl_sec", 60)
@@ -223,6 +297,11 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("jwt.secret", "fin-vault-secret-change-me")
 	v.SetDefault("jwt.expire", "168h")
+
+	// 多 API 服务商默认值
+	v.SetDefault("data_providers.tushare.enabled", false)
+	v.SetDefault("data_providers.tushare.base_url", "https://api.tushare.pro")
+	v.SetDefault("data_providers.tushare.token", "")
 }
 
 // expandEnvInViper 展开所有 string 类型配置项里的 ${VAR:default} 占位符。
@@ -272,4 +351,42 @@ func expandEnv(s string) string {
 		i++
 	}
 	return out.String()
+}
+
+// configPath 记录配置文件路径，用于 SaveConfig 回写。
+var configPath string
+
+// SaveConfig 将内存中的非敏感配置回写到 yaml 文件。
+//
+// 注意：data_providers.tushare.token 和 llm.providers.*.api_key 等敏感字段
+// 已保存到 DB（通过页面设置页配置），不再写入配置文件。
+// 仅更新非敏感段（如 server/database/cache/log 等）。
+func SaveConfig(cfg *Config) error {
+	if configPath == "" {
+		return fmt.Errorf("config path not set, cannot save")
+	}
+
+	// 1. 读取原始文件作为基底（保留注释与格式）
+	v := viper.New()
+	v.SetConfigFile(configPath)
+	v.SetConfigType("yaml")
+	if err := v.ReadInConfig(); err != nil {
+		return fmt.Errorf("read config for update: %w", err)
+	}
+
+	// 2. 合并非敏感段
+	nonSensitiveMap := map[string]any{
+		"server": map[string]any{"host": cfg.Server.Host, "port": cfg.Server.Port, "mode": cfg.Server.Mode},
+		"cache":  map[string]any{"driver": cfg.Cache.Driver},
+		"log":    map[string]any{"level": cfg.Log.Level, "format": cfg.Log.Format},
+	}
+	if err := v.MergeConfigMap(nonSensitiveMap); err != nil {
+		return fmt.Errorf("merge non-sensitive config: %w", err)
+	}
+
+	// 3. 写回
+	if err := v.WriteConfig(); err != nil {
+		return fmt.Errorf("write config to %s: %w", configPath, err)
+	}
+	return nil
 }

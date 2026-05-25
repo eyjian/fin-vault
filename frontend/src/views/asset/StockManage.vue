@@ -5,21 +5,39 @@
 //   - 流水：覆盖 5 种类型 buy/sell/dividend/split/bonus
 
 import { assetApi } from '@/api/asset'
+import { assetProbeApi } from '@/api/asset_probe'
 import { quoteApi } from '@/api/quote'
-import type { Asset, StockDetail } from '@/api/types'
+import type { Asset, AssetProbeResult, StockDetail } from '@/api/types'
 import MoneyInput from '@/components/MoneyInput.vue'
+import PulseDiagnosisCell from '@/components/PulseDiagnosisCell.vue'
 import TxnDialog from '@/components/TxnDialog.vue'
+import { usePulseDiagnosis } from '@/composables/usePulseDiagnosis'
 import { usePlatformStore } from '@/stores/platform'
-import { Delete, Edit, Money, Plus, Refresh } from '@element-plus/icons-vue'
+import { Delete, Download, Edit, MagicStick, Money, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 
 const platformStore = usePlatformStore()
+const router = useRouter()
+
+function viewTxn(a: Asset) {
+  if (!a.id) return
+  window.open(`/transaction?asset_id=${a.id}`, '_blank')
+}
 
 const list = ref<Asset[]>([])
 const total = ref(0)
 const loading = ref(false)
 const filter = reactive({ keyword: '', market: '', status: '', page: 1, page_size: 20 })
+
+// AI 把脉
+const pulse = usePulseDiagnosis()
+
+const selectedRows = ref<Asset[]>([])
+function onSelectionChange(rows: Asset[]) {
+  selectedRows.value = rows
+}
 
 async function fetchList() {
   loading.value = true
@@ -28,7 +46,8 @@ async function fetchList() {
       page: filter.page,
       page_size: filter.page_size,
       keyword: filter.keyword || undefined,
-      status: filter.status || undefined
+      status: filter.status || undefined,
+      include_holdings: true
     })
     list.value = (r?.items || r?.list || []).filter((a: Asset) =>
       filter.market ? a.stock_detail?.market === filter.market : true
@@ -52,7 +71,7 @@ function emptyForm(): Asset {
     name: '',
     asset_type: 'stock',
     currency: 'CNY',
-    status: 'active',
+    status: '活跃',
     issuer_platform_id: undefined,
     risk_level: '',
     remark: '',
@@ -76,6 +95,86 @@ function openEdit(a: Asset) {
   if (!form.value.stock_detail) form.value.stock_detail = { market: 'SH' } as StockDetail
   isEdit.value = true
   formVisible.value = true
+}
+
+// === “按代码获取信息”（asset-form-autofill）===
+//
+// 仅填空策略：已填字段一律保留，仅对“空 / null / undefined”进行赋值。
+// 按钮 disabled 条件：!form.asset_code || !form.stock_detail.market。
+// market 用户已选则保留；保留服务端推断的其它字段（行业/板块/上市日/最新价）。
+const probing = ref(false)
+
+// 按代码前缀建议 market（仅在 market 为空或与建议一致时才设置；用户已选则不动）。
+// 规则（A 股粗略推断）：
+//   600/601/603/605/688/689 → SH
+//   000/001/002/003/300/301 → SZ
+//   430/8/9 开头 → BJ
+//   港股 5 位数字 → HK
+//   其它（含字母）→ US
+function inferMarket(code: string): StockDetail['market'] | null {
+  if (!code) return null
+  const c = code.trim().toUpperCase()
+  if (/^(600|601|603|605|688|689)\d{3}$/.test(c)) return 'SH'
+  if (/^(000|001|002|003|300|301)\d{3}$/.test(c)) return 'SZ'
+  if (/^(430|8|9)\d{4,5}$/.test(c)) return 'BJ'
+  if (/^\d{5}$/.test(c)) return 'HK'
+  if (/^[A-Z][A-Z.]*$/.test(c)) return 'US'
+  return null
+}
+
+watch(
+  () => form.value.asset_code,
+  (code) => {
+    if (!formVisible.value) return
+    const sd = form.value.stock_detail
+    if (!sd) return
+    const suggested = inferMarket(code || '')
+    if (!suggested) return
+    // 仅在 market 为空时填建议；用户已选则不动。
+    if (!sd.market) sd.market = suggested
+  }
+)
+
+async function onProbeStock() {
+  if (!form.value.asset_code) return
+  if (!form.value.stock_detail?.market) {
+    ElMessage.warning('请先选择市场')
+    return
+  }
+  probing.value = true
+  try {
+    const r: AssetProbeResult = await assetProbeApi.probe({
+      asset_type: 'stock',
+      asset_code: form.value.asset_code,
+      market: form.value.stock_detail.market
+    })
+    const sd = (form.value.stock_detail ||= { market: 'SH' } as StockDetail)
+    let filled = 0
+    const fillStr = (
+      cur: string | undefined | null,
+      next?: string
+    ): string | undefined => {
+      if (next && (cur === '' || cur === null || cur === undefined)) {
+        filled++
+        return next
+      }
+      return cur ?? undefined
+    }
+    form.value.name = fillStr(form.value.name, r.name) || form.value.name
+    sd.industry = fillStr(sd.industry, r.industry)
+    sd.sector = fillStr(sd.sector, r.sector)
+    sd.listing_date = fillStr(sd.listing_date, r.listing_date)
+    sd.latest_price = fillStr(sd.latest_price as string | undefined, r.latest_price)
+    if (filled > 0) {
+      ElMessage.success(`已自动填充 ${filled} 个字段`)
+    } else {
+      ElMessage.info('已是最新信息（未覆盖已填字段）')
+    }
+  } catch {
+    /* http.ts 拦截器已弹错误提示；表单保持原状，不阻塞手动录入 */
+  } finally {
+    probing.value = false
+  }
 }
 
 function sanitizePayload(a: Asset): Asset {
@@ -135,7 +234,7 @@ async function refreshAll() {
   refreshing.value = true
   try {
     const ids = list.value.map((a) => a.id!).filter(Boolean) as number[]
-    const res = await quoteApi.refresh({ asset_ids: ids, source: 'auto' })
+    const res = await quoteApi.refresh({ asset_ids: ids, source: '自动' })
     const ok = (res || []).filter((r) => r.ok).length
     ElMessage.success(`刷新完成：成功 ${ok} / ${res?.length || 0}`)
     fetchList()
@@ -151,6 +250,64 @@ const txnAsset = ref<Asset | null>(null)
 function openTxn(a: Asset) {
   txnAsset.value = a
   txnDialog.value = true
+}
+
+// 拉取列表后预加载该页资产的把脉缓存
+watch(
+  list,
+  (arr) => {
+    const ids = (arr || []).map((a) => a.id!).filter(Boolean) as number[]
+    if (ids.length > 0) pulse.preload(ids)
+  },
+  { flush: 'post' }
+)
+
+async function diagnoseOne(assetId: number) {
+  await pulse.diagnose([assetId])
+}
+
+async function diagnoseSelected() {
+  const ids = selectedRows.value.map((r) => r.id!).filter(Boolean) as number[]
+  if (ids.length === 0) {
+    ElMessage.warning('请先勾选需要把脉的资产')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `将对 ${ids.length} 个资产发起 AI 把脉（会消耗 token），是否继续？`,
+      'AI 把脉确认',
+      { type: 'info', confirmButtonText: '确认', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  await pulse.diagnose(ids)
+}
+
+// 盈亏格式化辅助函数
+function getPnlColor(val: string | number | null | undefined): string {
+  if (!val) return ''
+  const num = typeof val === 'string' ? parseFloat(val) : val
+  if (isNaN(num)) return ''
+  if (num > 0) return '#67C23A' // 绿色
+  if (num < 0) return '#F56C6C' // 红色
+  return ''
+}
+
+function formatPnl(val: string | number | null | undefined): string {
+  if (!val && val !== 0) return '-'
+  const num = typeof val === 'string' ? parseFloat(val) : val
+  if (isNaN(num)) return '-'
+  const prefix = num > 0 ? '+' : ''
+  return prefix + num.toFixed(2)
+}
+
+function formatPnlRatio(val: string | number | null | undefined): string {
+  if (!val && val !== 0) return '-'
+  const num = typeof val === 'string' ? parseFloat(val) : val
+  if (isNaN(num)) return '-'
+  const prefix = num > 0 ? '+' : ''
+  return prefix + (num * 100).toFixed(2) + '%'
 }
 
 const marketLabel = (m: string) =>
@@ -178,16 +335,41 @@ const platformName = computed(() => (id?: number | null) => platformStore.nameOf
           <el-option label="北交所" value="BJ" />
         </el-select>
         <el-select v-model="filter.status" placeholder="状态" clearable style="width: 120px;" @change="fetchList">
-          <el-option label="active" value="active" />
-          <el-option label="delisted" value="delisted" />
+          <el-option label="活跃" value="活跃" />
+          <el-option label="已退市" value="已退市" />
         </el-select>
         <el-button type="primary" @click="fetchList">查询</el-button>
         <div class="fv-grow" />
         <el-button :icon="Refresh" :loading="refreshing" @click="refreshAll">刷新行情</el-button>
+        <el-button
+          :icon="MagicStick"
+          :loading="pulse.state.batchRunning"
+          :disabled="selectedRows.length === 0"
+          @click="diagnoseSelected"
+        >
+          批量 AI 把脉
+          <span v-if="selectedRows.length > 0" style="margin-left: 4px;">({{ selectedRows.length }})</span>
+        </el-button>
         <el-button type="primary" :icon="Plus" @click="openCreate">新增股票</el-button>
       </div>
 
-      <el-table :data="list" v-loading="loading" stripe border :max-height="540">
+      <div
+        v-if="pulse.state.batchRunning && pulse.state.total > 1"
+        style="margin-bottom: 8px; font-size: 13px; color: var(--el-text-color-secondary);"
+      >
+        把脉进度：{{ pulse.state.done }} / {{ pulse.state.total }}
+      </div>
+
+      <el-alert
+        title="AI 建议仅供参考，投资决策请自行判断"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 8px;"
+      />
+
+      <el-table :data="list" v-loading="loading" stripe border :max-height="540" @selection-change="onSelectionChange">
+        <el-table-column type="selection" width="42" />
         <el-table-column prop="asset_code" label="股票代码" width="100" />
         <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
         <el-table-column label="市场" width="80">
@@ -198,18 +380,69 @@ const platformName = computed(() => (id?: number | null) => platformStore.nameOf
         <el-table-column label="最新价" width="100" align="right">
           <template #default="{ row }">{{ row.stock_detail?.latest_price || '-' }}</template>
         </el-table-column>
+        <el-table-column label="持有数量" width="100" align="right">
+          <template #default="{ row }">{{ row.holding_summary?.quantity || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="平均成本" width="100" align="right">
+          <template #default="{ row }">{{ row.holding_summary?.avg_cost || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="市值" width="100" align="right">
+          <template #default="{ row }">{{ row.holding_summary?.market_value || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="未实现盈亏" width="120" align="right">
+          <template #default="{ row }">
+            <span :style="{ color: getPnlColor(row.holding_summary?.unrealized_pnl) }">
+              {{ formatPnl(row.holding_summary?.unrealized_pnl) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="总盈亏" width="120" align="right">
+          <template #default="{ row }">
+            <span :style="{ color: getPnlColor(row.holding_summary?.total_pnl) }">
+              {{ formatPnl(row.holding_summary?.total_pnl) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="盈亏比率" width="100" align="right">
+          <template #default="{ row }">
+            <span :style="{ color: getPnlColor(row.holding_summary?.pnl_ratio) }">
+              {{ formatPnlRatio(row.holding_summary?.pnl_ratio) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="已实现盈亏" width="120" align="right">
+          <template #default="{ row }">
+            <span :style="{ color: getPnlColor(row.holding_summary?.realized_pnl) }">
+              {{ formatPnl(row.holding_summary?.realized_pnl) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="累计分红" width="100" align="right">
+          <template #default="{ row }">{{ row.holding_summary?.total_dividend || '-' }}</template>
+        </el-table-column>
         <el-table-column label="平台" width="140">
           <template #default="{ row }">{{ platformName(row.issuer_platform_id) || '-' }}</template>
         </el-table-column>
         <el-table-column prop="currency" label="币种" width="70" />
         <el-table-column label="状态" width="80">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.status === 'active' ? 'success' : 'info'">{{ row.status }}</el-tag>
+            <el-tag size="small" :type="row.status === '活跃' ? 'success' : 'info'">{{ row.status }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="AI 把脉" width="170" fixed="right">
+          <template #default="{ row }">
+            <PulseDiagnosisCell
+              :asset-id="row.id"
+              :result="pulse.getResult(row.id)"
+              :loading="pulse.isLoading(row.id)"
+              @diagnose="diagnoseOne"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="320" fixed="right">
           <template #default="{ row }">
             <el-button size="small" :icon="Money" @click="openTxn(row)">录流水</el-button>
+            <el-button size="small" @click="viewTxn(row)">查看流水</el-button>
             <el-button size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
             <el-button size="small" type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
           </template>
@@ -235,7 +468,16 @@ const platformName = computed(() => (id?: number | null) => platformStore.nameOf
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="股票代码" required>
-              <el-input v-model="form.asset_code" placeholder="例如 600519" />
+              <el-input v-model="form.asset_code" placeholder="例如 600519">
+                <template #append>
+                  <el-button
+                    :icon="Download"
+                    :disabled="!form.asset_code || !form.stock_detail?.market"
+                    :loading="probing"
+                    @click="onProbeStock"
+                  >获取信息</el-button>
+                </template>
+              </el-input>
             </el-form-item>
           </el-col>
           <el-col :span="12">

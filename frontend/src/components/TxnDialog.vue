@@ -141,7 +141,7 @@ async function submit() {
     fee: form.value.fee || '0',
     tax: form.value.tax || '0',
     currency: form.value.currency,
-    source: 'manual',
+    source: '手动',
     external_id: form.value.external_id || undefined,
     note: form.value.note || undefined
   }

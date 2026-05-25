@@ -41,25 +41,30 @@ func RegisterRoutes(app *App) *gin.Engine {
 		return r
 	}
 
-	h.Meta.Register(v1)         // /healthz /version /platforms
-	h.Asset.Register(v1)        // /assets
-	h.Holding.Register(v1)      // /holdings
-	h.Transaction.Register(v1)  // /transactions
-	h.Quote.Register(v1)        // /quotes
-	h.Rate.Register(v1)         // /rates
-	h.Export.Register(v1)       // /export
+	h.Meta.Register(v1)        // /healthz /version /platforms
+	h.Asset.Register(v1)       // /assets
+	h.Holding.Register(v1)     // /holdings
+	h.Transaction.Register(v1) // /transactions
+	h.Quote.Register(v1)       // /quotes
+	h.Rate.Register(v1)        // /rates
+	h.Export.Register(v1)      // /export
 
-	if h.Chat != nil {
-		h.Chat.Register(v1) // /ai/conversations /ai/chat/stream
-	}
-	if h.Advisor != nil {
-		h.Advisor.Register(v1) // /ai/advisor/recommend
-	}
-	if h.Analysis != nil {
-		h.Analysis.Register(v1) // /ai/analysis/profit
-	}
 	if h.AIMeta != nil {
 		h.AIMeta.Register(v1) // /ai/providers
+	}
+	if h.AISession != nil {
+		h.AISession.Register(v1) // /ai/sessions  (CRUD + listMessages)
+	}
+	if h.AIMessage != nil {
+		h.AIMessage.Register(v1) // POST /ai/sessions/:id/messages
+	}
+	if h.AIPulseDiagnosis != nil {
+		h.AIPulseDiagnosis.Register(v1) // POST /ai/pulse-diagnosis & GET /ai/pulse-diagnosis
+	}
+
+	// 设置页：数据源配置读写
+	if h.Config != nil {
+		h.Config.Register(v1) // GET/PUT /config/data_providers
 	}
 
 	// dev 模式开放手工触发 cron

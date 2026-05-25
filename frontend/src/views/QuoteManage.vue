@@ -11,7 +11,7 @@ import MoneyInput from '@/components/MoneyInput.vue'
 const list = ref<Asset[]>([])
 const refreshing = ref(false)
 
-const refreshSource = ref<'auto' | 'eastmoney' | 'sina' | 'tencent'>('auto')
+const refreshSource = ref<'自动' | '东方财富' | '新浪' | '腾讯'>('自动')
 
 async function loadAssets() {
   try {
@@ -43,7 +43,7 @@ const manualForm = reactive({
   price: '',
   change_pct: '',
   volume: '',
-  source: 'manual'
+  source: '手动'
 })
 async function submitManual() {
   if (!manualForm.asset_id || !manualForm.price) {
@@ -55,7 +55,7 @@ async function submitManual() {
     price: manualForm.price,
     change_pct: manualForm.change_pct,
     volume: manualForm.volume,
-    source: 'manual'
+    source: '手动'
   })
   ElMessage.success('已写入')
   manualVisible.value = false
@@ -69,10 +69,10 @@ onMounted(loadAssets)
     <div class="fv-card">
       <div class="fv-flex" style="margin-bottom: 12px;">
         <el-select v-model="refreshSource" style="width: 160px;">
-          <el-option label="自动 (按优先级)" value="auto" />
-          <el-option label="东方财富" value="eastmoney" />
-          <el-option label="新浪" value="sina" />
-          <el-option label="腾讯" value="tencent" />
+          <el-option label="自动 (按优先级)" value="自动" />
+          <el-option label="东方财富" value="东方财富" />
+          <el-option label="新浪" value="新浪" />
+          <el-option label="腾讯" value="腾讯" />
         </el-select>
         <el-button type="primary" :icon="Refresh" :loading="refreshing" @click="refreshAll">
           刷新全部行情（{{ list.length }} 项）
@@ -84,7 +84,9 @@ onMounted(loadAssets)
       <div v-if="lastResult.length > 0" style="margin-top: 12px;">
         <el-divider>刷新结果</el-divider>
         <el-table :data="lastResult" stripe border :max-height="400">
-          <el-table-column prop="asset_id" label="资产ID" width="100" />
+          <el-table-column prop="asset_id" label="资产ID" width="90" />
+          <el-table-column prop="asset_code" label="资产代码" width="120" />
+          <el-table-column prop="name" label="资产名称" min-width="140" show-overflow-tooltip />
           <el-table-column label="状态" width="100">
             <template #default="{ row }">
               <el-tag :type="row.ok ? 'success' : 'danger'" size="small">{{ row.ok ? '成功' : '失败' }}</el-tag>
@@ -99,8 +101,15 @@ onMounted(loadAssets)
 
     <el-dialog v-model="manualVisible" title="手动写入行情" width="500px">
       <el-form :model="manualForm" label-width="100px">
-        <el-form-item label="资产ID">
-          <el-input-number v-model="manualForm.asset_id" :min="1" />
+        <el-form-item label="资产">
+          <el-select v-model="manualForm.asset_id" placeholder="选择资产" filterable style="width: 100%;">
+            <el-option
+              v-for="a in list"
+              :key="a.id"
+              :value="a.id"
+              :label="`${a.asset_code} ${a.name}`"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="价格">
           <MoneyInput v-model="manualForm.price" />

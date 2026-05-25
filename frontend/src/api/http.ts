@@ -1,5 +1,5 @@
-import axios from 'axios'
 import type { AxiosInstance, AxiosRequestConfig } from 'axios'
+import axios from 'axios'
 import { ElMessage } from 'element-plus'
 
 const baseURL = '/api/v1'
@@ -38,13 +38,30 @@ instance.interceptors.response.use(
   (resp) => {
     const body = resp.data as ApiResp
     if (body && typeof body.code === 'number' && body.code !== 0) {
-      ElMessage.error(`[${body.code}] ${body.message || '请求失败'}`)
+      // 直接展示后端给出的中文 message；空消息时给出兜底
+      ElMessage.error(body.message || '请求失败')
       return Promise.reject(body)
     }
     return resp
   },
   (err) => {
-    const msg = err?.response?.data?.message || err?.message || '网络错误'
+    // axios 自身错误（网络、HTTP 4xx/5xx 但 body 不是统一格式等）
+    const status = err?.response?.status
+    const respBody = err?.response?.data
+    let msg = ''
+    if (respBody && typeof respBody === 'object' && typeof respBody.message === 'string') {
+      msg = respBody.message
+    }
+    if (!msg) {
+      if (status === 401) msg = '未登录或登录已失效'
+      else if (status === 403) msg = '没有访问权限'
+      else if (status === 404) msg = '资源不存在'
+      else if (status === 502) msg = '上游服务不可用，请稍后重试'
+      else if (status === 504) msg = '请求超时，请稍后重试'
+      else if (status && status >= 500) msg = '服务器内部错误'
+      else if (err?.code === 'ECONNABORTED') msg = '请求超时，请稍后重试'
+      else msg = err?.message || '网络错误'
+    }
     ElMessage.error(msg)
     return Promise.reject(err)
   }

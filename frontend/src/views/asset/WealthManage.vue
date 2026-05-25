@@ -8,13 +8,22 @@
 import { assetApi } from '@/api/asset'
 import type { Asset, WealthDetail } from '@/api/types'
 import MoneyInput from '@/components/MoneyInput.vue'
+import PulseDiagnosisCell from '@/components/PulseDiagnosisCell.vue'
 import TxnDialog from '@/components/TxnDialog.vue'
+import { usePulseDiagnosis } from '@/composables/usePulseDiagnosis'
 import { usePlatformStore } from '@/stores/platform'
-import { AlarmClock, Delete, Edit, Money, Plus } from '@element-plus/icons-vue'
+import { AlarmClock, Delete, Edit, MagicStick, Money, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 
 const platformStore = usePlatformStore()
+const router = useRouter()
+
+function viewTxn(a: Asset) {
+  if (!a.id) return
+  window.open(`/transaction?asset_id=${a.id}`, '_blank')
+}
 
 const list = ref<Asset[]>([])
 const total = ref(0)
@@ -28,6 +37,14 @@ const filter = reactive({
   page_size: 20
 })
 
+// AI 把脉
+const pulse = usePulseDiagnosis()
+
+const selectedRows = ref<Asset[]>([])
+function onSelectionChange(rows: Asset[]) {
+  selectedRows.value = rows
+}
+
 async function fetchList() {
   loading.value = true
   try {
@@ -36,7 +53,8 @@ async function fetchList() {
       page_size: filter.page_size,
       keyword: filter.keyword || undefined,
       status: filter.status || undefined,
-      maturing_within_days: filter.maturing_within_days || undefined
+      maturing_within_days: filter.maturing_within_days || undefined,
+      include_holdings: true
     })
     let arr = r?.items || r?.list || []
     if (filter.product_type) {
@@ -63,7 +81,7 @@ function emptyForm(): Asset {
     name: '',
     asset_type: 'wealth',
     currency: 'CNY',
-    status: 'active',
+    status: '活跃',
     issuer_platform_id: undefined,
     risk_level: 'R2',
     remark: '',
@@ -150,6 +168,64 @@ function openTxn(a: Asset) {
   txnDialog.value = true
 }
 
+// 拉取列表后预加载该页资产的把脉缓存
+watch(
+  list,
+  (arr) => {
+    const ids = (arr || []).map((a) => a.id!).filter(Boolean) as number[]
+    if (ids.length > 0) pulse.preload(ids)
+  },
+  { flush: 'post' }
+)
+
+async function diagnoseOne(assetId: number) {
+  await pulse.diagnose([assetId])
+}
+
+async function diagnoseSelected() {
+  const ids = selectedRows.value.map((r) => r.id!).filter(Boolean) as number[]
+  if (ids.length === 0) {
+    ElMessage.warning('请先勾选需要把脉的资产')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `将对 ${ids.length} 个资产发起 AI 把脉（会消耗 token），是否继续？`,
+      'AI 把脉确认',
+      { type: 'info', confirmButtonText: '确认', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  await pulse.diagnose(ids)
+}
+
+// 盈亏格式化辅助函数
+function getPnlColor(val: string | number | null | undefined): string {
+  if (!val) return ''
+  const num = typeof val === 'string' ? parseFloat(val) : val
+  if (isNaN(num)) return ''
+  if (num > 0) return '#67C23A' // 绿色
+  if (num < 0) return '#F56C6C' // 红色
+  return ''
+}
+
+function formatPnl(val: string | number | null | undefined): string {
+  if (!val && val !== 0) return '-'
+  const num = typeof val === 'string' ? parseFloat(val) : val
+  if (isNaN(num)) return '-'
+  const prefix = num > 0 ? '+' : ''
+  return prefix + num.toFixed(2)
+}
+
+function formatPnlRatio(val: string | number | null | undefined): string {
+  if (!val && val !== 0) return '-'
+  const num = typeof val === 'string' ? parseFloat(val) : val
+  if (isNaN(num)) return '-'
+  const prefix = num > 0 ? '+' : ''
+  return prefix + (num * 100).toFixed(2) + '%'
+}
+
 const productTypeMap: Record<string, string> = {
   fixed_deposit: '定期',
   structured: '结构性',
@@ -199,15 +275,40 @@ const platformName = computed(() => (id?: number | null) => platformStore.nameOf
           @change="fetchList"
         />
         <el-select v-model="filter.status" placeholder="状态" clearable style="width: 120px;" @change="fetchList">
-          <el-option label="active" value="active" />
-          <el-option label="matured" value="matured" />
+          <el-option label="活跃" value="活跃" />
+          <el-option label="已到期" value="已到期" />
         </el-select>
         <el-button type="primary" @click="fetchList">查询</el-button>
         <div class="fv-grow" />
+        <el-button
+          :icon="MagicStick"
+          :loading="pulse.state.batchRunning"
+          :disabled="selectedRows.length === 0"
+          @click="diagnoseSelected"
+        >
+          批量 AI 把脉
+          <span v-if="selectedRows.length > 0" style="margin-left: 4px;">({{ selectedRows.length }})</span>
+        </el-button>
         <el-button type="primary" :icon="Plus" @click="openCreate">新增理财</el-button>
       </div>
 
-      <el-table :data="list" v-loading="loading" stripe border :max-height="540">
+      <div
+        v-if="pulse.state.batchRunning && pulse.state.total > 1"
+        style="margin-bottom: 8px; font-size: 13px; color: var(--el-text-color-secondary);"
+      >
+        把脉进度：{{ pulse.state.done }} / {{ pulse.state.total }}
+      </div>
+
+      <el-alert
+        title="AI 建议仅供参考，投资决策请自行判断"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 8px;"
+      />
+
+      <el-table :data="list" v-loading="loading" stripe border :max-height="540" @selection-change="onSelectionChange">
+        <el-table-column type="selection" width="42" />
         <el-table-column prop="asset_code" label="产品代码" width="120" />
         <el-table-column label="名称" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">
@@ -234,7 +335,50 @@ const platformName = computed(() => (id?: number | null) => platformStore.nameOf
           <template #default="{ row }">{{ row.wealth_detail?.end_date?.slice(0,10) || '-' }}</template>
         </el-table-column>
         <el-table-column label="期限(天)" width="100" align="right" prop="wealth_detail.term_days" />
-        <el-table-column label="起购金额" width="120" align="right">
+        <el-table-column label="持有份额" width="100" align="right">
+          <template #default="{ row }">{{ row.holding_summary?.quantity || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="平均成本" width="100" align="right">
+          <template #default="{ row }">{{ row.holding_summary?.avg_cost || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="最新净值" width="100" align="right">
+          <template #default="{ row }">{{ row.holding_summary?.latest_price || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="市值" width="100" align="right">
+          <template #default="{ row }">{{ row.holding_summary?.market_value || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="未实现盈亏" width="120" align="right">
+          <template #default="{ row }">
+            <span :style="{ color: getPnlColor(row.holding_summary?.unrealized_pnl) }">
+              {{ formatPnl(row.holding_summary?.unrealized_pnl) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="总盈亏" width="120" align="right">
+          <template #default="{ row }">
+            <span :style="{ color: getPnlColor(row.holding_summary?.total_pnl) }">
+              {{ formatPnl(row.holding_summary?.total_pnl) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="盈亏比率" width="100" align="right">
+          <template #default="{ row }">
+            <span :style="{ color: getPnlColor(row.holding_summary?.pnl_ratio) }">
+              {{ formatPnlRatio(row.holding_summary?.pnl_ratio) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="已实现盈亏" width="120" align="right">
+          <template #default="{ row }">
+            <span :style="{ color: getPnlColor(row.holding_summary?.realized_pnl) }">
+              {{ formatPnl(row.holding_summary?.realized_pnl) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="累计利息" width="100" align="right">
+          <template #default="{ row }">{{ row.holding_summary?.total_dividend || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="发行平台" width="160">
           <template #default="{ row }">{{ row.wealth_detail?.min_amount || '-' }}</template>
         </el-table-column>
         <el-table-column label="发行平台" width="160">
@@ -243,9 +387,20 @@ const platformName = computed(() => (id?: number | null) => platformStore.nameOf
         <el-table-column label="自动续期" width="90" align="center">
           <template #default="{ row }">{{ row.wealth_detail?.is_auto_renewal ? '是' : '否' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="AI 把脉" width="170" fixed="right">
+          <template #default="{ row }">
+            <PulseDiagnosisCell
+              :asset-id="row.id"
+              :result="pulse.getResult(row.id)"
+              :loading="pulse.isLoading(row.id)"
+              @diagnose="diagnoseOne"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="320" fixed="right">
           <template #default="{ row }">
             <el-button size="small" :icon="Money" @click="openTxn(row)">录流水</el-button>
+            <el-button size="small" @click="viewTxn(row)">查看流水</el-button>
             <el-button size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
             <el-button size="small" type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
           </template>

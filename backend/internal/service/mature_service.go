@@ -98,7 +98,7 @@ func (s *MatureService) matureOne(ctx context.Context, h *domain.Holding) error 
 	if wealth == nil {
 		return errs.ErrWealthDetailMissing.WithMsg("wealth detail nil")
 	}
-	if wealth.EndDate == nil {
+	if wealth.EndDate.Time() == nil {
 		return errs.ErrWealthDetailMissing.WithMsg("missing end_date")
 	}
 
@@ -109,8 +109,8 @@ func (s *MatureService) matureOne(ctx context.Context, h *domain.Holding) error 
 	}
 	// mature_amount = total_cost * (1 + yield/100 * term_days/365)
 	termDays := decimal.NewFromInt(int64(wealth.TermDays))
-	if termDays.IsZero() && wealth.StartDate != nil {
-		days := wealth.EndDate.Sub(*wealth.StartDate).Hours() / 24
+	if termDays.IsZero() && wealth.StartDate.Time() != nil {
+		days := wealth.EndDate.Time().Sub(*wealth.StartDate.Time()).Hours() / 24
 		termDays = decimal.NewFromFloat(days).Round(0)
 	}
 	periodFactor := yield.Div(decimal.NewFromInt(100)).
@@ -126,7 +126,7 @@ func (s *MatureService) matureOne(ctx context.Context, h *domain.Holding) error 
 			AssetID:    h.AssetID,
 			PlatformID: h.PlatformID,
 			TxnType:    domain.TxnTypeMature,
-			TxnTime:    *wealth.EndDate,
+			TxnTime:    *wealth.EndDate.Time(),
 			Quantity:   h.Quantity,
 			Price:      decimal.Zero,
 			Amount:     matureAmount,

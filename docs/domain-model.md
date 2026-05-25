@@ -456,7 +456,7 @@ SELECT * FROM t_fv_core_holdings h
   JOIN t_fv_core_assets a ON h.f_asset_id = a.f_id
   JOIN t_fv_core_wealth_details w ON a.f_id = w.f_asset_id
   WHERE a.f_asset_type = 'wealth'
-    AND h.f_status = 'holding'
+    AND h.f_status = '持有中'
     AND w.f_end_date <= CURRENT_DATE
   ↓
 对每条记录：
@@ -471,11 +471,11 @@ SELECT * FROM t_fv_core_holdings h
      price = mature_amount / h.quantity
      amount = mature_amount
      net_amount = mature_amount
-     source = 'auto_mature'
+     source = '自动到期'
      note = '系统自动生成 - 理财到期'
   ↓
-  3. 更新 Holding：
-     status = 'matured'
+ 3. 更新 Holding：
+     status = '已到期'
      realized_pnl += (mature_amount - h.total_cost)
      quantity = 0
   ↓

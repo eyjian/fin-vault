@@ -43,6 +43,7 @@ func NewEastmoneyFetcher(timeout time.Duration, opts ...FetcherOption) QuoteFetc
 	c := resty.New().
 		SetTimeout(cfg.timeout).
 		SetHeader("User-Agent", "Mozilla/5.0 FinVault/1.0").
+		SetHeader("Referer", "https://quote.eastmoney.com").
 		SetRetryCount(1).
 		SetRetryWaitTime(500 * time.Millisecond)
 	return &eastmoneyFetcher{

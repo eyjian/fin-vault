@@ -126,6 +126,58 @@ func (s *HoldingService) Get(ctx context.Context, userID, id uint) (*domain.Hold
 	return &view, nil
 }
 
+// GetSummaryByAsset 获取单个资产的持仓汇总（跨平台汇总）。
+func (s *HoldingService) GetSummaryByAsset(ctx context.Context, userID, assetID uint) (*domain.HoldingSummary, error) {
+	holdings, _, err := s.holdingRepo.ListByUser(ctx, repository.ListOptions{
+		UserID:   userID,
+		Page:     1,
+		PageSize: 100,
+		Filters:  map[string]any{"asset_id": assetID},
+	})
+	if err != nil {
+		return nil, errs.ErrDB.WithCause(err)
+	}
+	if len(holdings) == 0 {
+		return nil, nil // 无持仓
+	}
+
+	// 汇总所有平台的持仓数据
+	var totalQty, totalCost, realizedPnL, totalDividend decimal.Decimal
+	for i := range holdings {
+		h := holdings[i]
+		totalQty = totalQty.Add(h.Quantity)
+		totalCost = totalCost.Add(h.TotalCost)
+		realizedPnL = realizedPnL.Add(h.RealizedPnL)
+		totalDividend = totalDividend.Add(h.TotalDividend)
+	}
+
+	summary := &domain.HoldingSummary{
+		Quantity:      totalQty,
+		TotalCost:     totalCost,
+		RealizedPnL:   realizedPnL,
+		TotalDividend: totalDividend,
+	}
+
+	// 计算平均成本
+	if !totalQty.IsZero() {
+		summary.AvgCost = totalCost.Div(totalQty).Round(8)
+	}
+
+	// 获取最新行情并计算市值和盈亏（行情可选，无行情时只返回持仓成本数据）
+	q, _ := s.quoteRepo.GetLatest(ctx, assetID)
+	if q != nil && !q.Price.IsZero() {
+		summary.LatestPrice = q.Price
+		summary.MarketValue = totalQty.Mul(q.Price).Round(2)
+		summary.UnrealizedPnL = summary.MarketValue.Sub(totalCost).Round(2)
+		summary.TotalPnL = summary.UnrealizedPnL.Add(realizedPnL).Add(totalDividend).Round(2)
+		if !totalCost.IsZero() {
+			summary.PnLRatio = summary.TotalPnL.Div(totalCost).Round(6)
+		}
+	}
+
+	return summary, nil
+}
+
 // SwitchCostMethod 切换持仓成本计算方法（weighted_avg ↔ fifo）。
 //
 // 切换到 fifo 时由调用方触发 CostLot 重建（D1-06 任务）。

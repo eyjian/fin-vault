@@ -3,11 +3,13 @@ import type { PriceQuote } from './types'
 
 export interface RefreshReq {
   asset_ids?: number[]
-  source?: 'auto' | 'eastmoney' | 'sina' | 'tencent'
+  source?: '自动' | '东方财富' | '新浪' | '腾讯'
 }
 
 export interface RefreshResult {
   asset_id: number
+  asset_code?: string
+  name?: string
   source?: string
   price?: string
   ok: boolean

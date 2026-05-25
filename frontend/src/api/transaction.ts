@@ -11,6 +11,7 @@ export interface TxnListParams {
   txn_type?: TxnType
   start?: string
   end?: string
+  [key: string]: unknown
 }
 
 export const txnApi = {

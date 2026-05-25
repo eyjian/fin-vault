@@ -521,146 +521,96 @@ func (m *MockTransactionRepo) ExistsByExternalID(_ context.Context, userID, plat
 }
 
 // =====================================================================
-// MockAIConversationRepo —— 一体接口（CreateConv / GetConv / IncrTokens / AppendMessage 等）
+// MockPlatformRepo
 // =====================================================================
 
-// MockAIConversationRepo AI 会话与消息仓储 mock。
-type MockAIConversationRepo struct {
-	mu             sync.Mutex
-	Convs          map[uint]*domain.AIConversation
-	Messages       map[uint][]domain.AIMessage // convID → 消息列表（按 append 顺序）
-	IncrTokensLog  []IncrTokensCall            // IncrTokens 调用流水
-	CreateConvErr  error                       // 注入 CreateConv 错误
-	AppendMsgErr   error                       // 注入 AppendMessage 错误
-	GetConvErr     error                       // 注入 GetConv 错误
-	nextConvID     uint
+// MockPlatformRepo 平台字典仓储 mock。
+type MockPlatformRepo struct {
+	mu     sync.Mutex
+	ByID   map[uint]*domain.Platform
+	ByCode map[string]*domain.Platform
 }
 
-// IncrTokensCall 记录一次 IncrTokens 调用。
-type IncrTokensCall struct {
-	ConvID        uint
-	DeltaMessages int
-	DeltaTokens   int
-}
-
-// NewMockAIConvRepo 构造。
-func NewMockAIConvRepo() *MockAIConversationRepo {
-	return &MockAIConversationRepo{
-		Convs:    make(map[uint]*domain.AIConversation),
-		Messages: make(map[uint][]domain.AIMessage),
+// NewMockPlatformRepo 构造。
+func NewMockPlatformRepo() *MockPlatformRepo {
+	return &MockPlatformRepo{
+		ByID:   make(map[uint]*domain.Platform),
+		ByCode: make(map[string]*domain.Platform),
 	}
 }
 
-// CreateConv 实现接口。
-func (m *MockAIConversationRepo) CreateConv(_ context.Context, c *domain.AIConversation) error {
+// SetPlatform 注入测试数据。
+func (m *MockPlatformRepo) SetPlatform(p *domain.Platform) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.CreateConvErr != nil {
-		return m.CreateConvErr
-	}
-	m.nextConvID++
-	c.ID = m.nextConvID
-	m.Convs[c.ID] = c
-	return nil
+	m.ByID[p.ID] = p
+	m.ByCode[p.Code] = p
 }
 
-// GetConv 实现接口。
-func (m *MockAIConversationRepo) GetConv(_ context.Context, id uint) (*domain.AIConversation, error) {
+// List 实现接口。
+func (m *MockPlatformRepo) List(_ context.Context) ([]domain.Platform, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.GetConvErr != nil {
-		return nil, m.GetConvErr
+	out := make([]domain.Platform, 0, len(m.ByID))
+	for _, p := range m.ByID {
+		out = append(out, *p)
 	}
-	c, ok := m.Convs[id]
-	if !ok {
-		return nil, repository.ErrNotFound
-	}
-	return c, nil
-}
-
-// UpdateConv 实现接口。
-func (m *MockAIConversationRepo) UpdateConv(_ context.Context, c *domain.AIConversation) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.Convs[c.ID]; !ok {
-		return repository.ErrNotFound
-	}
-	m.Convs[c.ID] = c
-	return nil
-}
-
-// IncrTokens 实现接口。
-func (m *MockAIConversationRepo) IncrTokens(_ context.Context, id uint, deltaMessages, deltaTokens int) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if c, ok := m.Convs[id]; ok {
-		c.MessageCount += deltaMessages
-		c.TotalTokens += deltaTokens
-	}
-	m.IncrTokensLog = append(m.IncrTokensLog, IncrTokensCall{
-		ConvID: id, DeltaMessages: deltaMessages, DeltaTokens: deltaTokens,
-	})
-	return nil
-}
-
-// DeleteConv 实现接口（软删，简化为直接 delete map）。
-func (m *MockAIConversationRepo) DeleteConv(_ context.Context, id uint) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.Convs, id)
-	delete(m.Messages, id)
-	return nil
-}
-
-// ListConversations 实现接口。
-func (m *MockAIConversationRepo) ListConversations(_ context.Context, userID uint, _ repository.ListOptions) ([]domain.AIConversation, int64, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]domain.AIConversation, 0)
-	for _, c := range m.Convs {
-		if c.UserID == userID {
-			out = append(out, *c)
-		}
-	}
-	return out, int64(len(out)), nil
-}
-
-// AppendMessage 实现接口。
-func (m *MockAIConversationRepo) AppendMessage(_ context.Context, msg *domain.AIMessage) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.AppendMsgErr != nil {
-		return m.AppendMsgErr
-	}
-	cp := *msg
-	cp.ID = uint(len(m.Messages[msg.ConversationID]) + 1)
-	m.Messages[msg.ConversationID] = append(m.Messages[msg.ConversationID], cp)
-	return nil
-}
-
-// ListMessages 实现接口。
-func (m *MockAIConversationRepo) ListMessages(_ context.Context, convID uint, limit int) ([]domain.AIMessage, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	msgs := m.Messages[convID]
-	if limit > 0 && len(msgs) > limit {
-		// 取最近 limit 条
-		msgs = msgs[len(msgs)-limit:]
-	}
-	out := make([]domain.AIMessage, len(msgs))
-	copy(out, msgs)
 	return out, nil
 }
 
-// MessagesByRole 测试辅助：按 role 过滤指定会话的消息。
-func (m *MockAIConversationRepo) MessagesByRole(convID uint, role string) []domain.AIMessage {
+// GetByID 实现接口。
+func (m *MockPlatformRepo) GetByID(_ context.Context, id uint) (*domain.Platform, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]domain.AIMessage, 0)
-	for _, msg := range m.Messages[convID] {
-		if msg.Role == role {
-			out = append(out, msg)
-		}
+	p, ok := m.ByID[id]
+	if !ok {
+		return nil, repository.ErrNotFound
 	}
-	return out
+	return p, nil
+}
+
+// GetByCode 实现接口。
+func (m *MockPlatformRepo) GetByCode(_ context.Context, code string) (*domain.Platform, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.ByCode[code]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	return p, nil
+}
+
+// Create 实现接口。
+func (m *MockPlatformRepo) Create(_ context.Context, p *domain.Platform) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p.ID == 0 {
+		p.ID = uint(len(m.ByID) + 1)
+	}
+	m.ByID[p.ID] = p
+	m.ByCode[p.Code] = p
+	return nil
+}
+
+// Update 实现接口。
+func (m *MockPlatformRepo) Update(_ context.Context, p *domain.Platform) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.ByID[p.ID]; !ok {
+		return repository.ErrNotFound
+	}
+	m.ByID[p.ID] = p
+	m.ByCode[p.Code] = p
+	return nil
+}
+
+// Delete 实现接口。
+func (m *MockPlatformRepo) Delete(_ context.Context, id uint) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p, ok := m.ByID[id]; ok {
+		delete(m.ByCode, p.Code)
+	}
+	delete(m.ByID, id)
+	return nil
 }

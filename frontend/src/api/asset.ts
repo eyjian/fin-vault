@@ -9,6 +9,8 @@ export interface AssetListParams {
   keyword?: string
   status?: string
   maturing_within_days?: number
+  include_holdings?: boolean
+  [key: string]: unknown
 }
 
 export const assetApi = {

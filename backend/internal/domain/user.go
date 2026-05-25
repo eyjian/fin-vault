@@ -10,7 +10,7 @@ type User struct {
 	DisplayName     string `gorm:"size:64;column:f_display_name" json:"display_name"`
 	Email           string `gorm:"size:128;column:f_email" json:"email"`
 	DefaultCurrency string `gorm:"size:10;not null;default:CNY;column:f_default_currency" json:"default_currency"`
-	Status          string `gorm:"size:20;not null;default:active;column:f_status" json:"status"`
+	Status          string `gorm:"size:20;not null;default:活跃;column:f_status" json:"status"`
 }
 
 // TableName 显式表名。
@@ -24,7 +24,7 @@ type Platform struct {
 	PlatformType string    `gorm:"size:20;not null;index:idx_type_status,priority:1;column:f_platform_type" json:"platform_type"`
 	IconURL      string    `gorm:"size:255;column:f_icon_url" json:"icon_url"`
 	IsSystem     bool      `gorm:"not null;default:false;column:f_is_system" json:"is_system"`
-	Status       string    `gorm:"size:20;not null;default:active;index:idx_type_status,priority:2;column:f_status" json:"status"`
+	Status       string    `gorm:"size:20;not null;default:活跃;index:idx_type_status,priority:2;column:f_status" json:"status"`
 	CreatedAt    time.Time `gorm:"not null;column:f_created_at" json:"created_at"`
 	UpdatedAt    time.Time `gorm:"not null;column:f_updated_at" json:"updated_at"`
 }

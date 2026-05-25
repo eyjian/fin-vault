@@ -17,14 +17,21 @@ type fetcherConfig struct {
 	timeout time.Duration
 
 	// eastmoney
-	fundBaseURL  string // 默认 https://fundgz.1234567.com.cn
-	stockBaseURL string // 默认 https://push2.eastmoney.com
+	fundBaseURL       string // 默认 https://fundgz.1234567.com.cn
+	fundDetailBaseURL string // 默认 https://fund.eastmoney.com（基金元信息：pingzhongdata）
+	fundJJJBQKBaseURL string // 默认 https://api.fund.eastmoney.com（基金 JJJBQK：备用补全源；目前对很多 C 类基金返回 404，仅保留以便回退）
+	fundJbgkBaseURL   string // 默认 https://fundf10.eastmoney.com（基金基本概况 HTML 页：jbgk_{code}.html，主用补全源）
+	stockBaseURL      string // 默认 https://push2.eastmoney.com
+	stockF10BaseURL   string // 默认 https://datacenter.eastmoney.com（股票 F10 基本资料：行业/板块/上市日）
 
 	// sina
 	sinaBaseURL string // 默认 https://hq.sinajs.cn
 
 	// tencent
 	tencentBaseURL string // 默认 https://qt.gtimg.cn
+
+	// tushare
+	tushareBaseURL string // 默认 https://api.tushare.pro
 }
 
 // defaultConfig 返回填好默认 base URL 的配置。
@@ -33,11 +40,16 @@ func defaultConfig(timeout time.Duration) *fetcherConfig {
 		timeout = 5 * time.Second
 	}
 	return &fetcherConfig{
-		timeout:        timeout,
-		fundBaseURL:    "https://fundgz.1234567.com.cn",
-		stockBaseURL:   "https://push2.eastmoney.com",
-		sinaBaseURL:    "https://hq.sinajs.cn",
-		tencentBaseURL: "https://qt.gtimg.cn",
+		timeout:           timeout,
+		fundBaseURL:       "https://fundgz.1234567.com.cn",
+		fundDetailBaseURL: "https://fund.eastmoney.com",
+		fundJJJBQKBaseURL: "https://api.fund.eastmoney.com",
+		fundJbgkBaseURL:   "https://fundf10.eastmoney.com",
+		stockBaseURL:      "https://push2.eastmoney.com",
+		stockF10BaseURL:   "https://datacenter.eastmoney.com",
+		sinaBaseURL:       "https://hq.sinajs.cn",
+		tencentBaseURL:    "https://qt.gtimg.cn",
+		tushareBaseURL:    "https://api.tushare.pro",
 	}
 }
 
@@ -52,6 +64,44 @@ func WithFundBaseURL(url string) FetcherOption {
 	}
 }
 
+// WithFundDetailBaseURL 覆盖东方财富基金详情端点 baseURL（仅测试用）。
+//
+// 默认指向 https://fund.eastmoney.com，资产元信息探测会请求
+// {URL}/pingzhongdata/{code}.js 解析基金公司 / 经理 / 类型等字段。
+func WithFundDetailBaseURL(url string) FetcherOption {
+	return func(c *fetcherConfig) {
+		if url != "" {
+			c.fundDetailBaseURL = trimRightSlash(url)
+		}
+	}
+}
+
+// WithFundJJJBQKBaseURL 覆盖东方财富基金 JJJBQK（基本概况）端点 baseURL（仅测试用）。
+//
+// 默认指向 https://api.fund.eastmoney.com，基金补全器会请求
+// {URL}/f10/JJJBQK?FCODE={code}… 解析基金公司/类型/业绩基准/风险等级/净值等字段
+// （pingzhongdata 被反爬或字段缺失时的补充源）。
+func WithFundJJJBQKBaseURL(url string) FetcherOption {
+	return func(c *fetcherConfig) {
+		if url != "" {
+			c.fundJJJBQKBaseURL = trimRightSlash(url)
+		}
+	}
+}
+
+// WithFundJbgkBaseURL 覆盖东方财富基金基本概况 HTML 端点 baseURL（仅测试用）。
+//
+// 默认指向 https://fundf10.eastmoney.com，基金补全器会请求
+// {URL}/jbgk_{code}.html 解析基金简称/类型/管理人/经理/业绩比较基准等字段，
+// 这是替代不稳定 JJJBQK 接口的主用源。
+func WithFundJbgkBaseURL(url string) FetcherOption {
+	return func(c *fetcherConfig) {
+		if url != "" {
+			c.fundJbgkBaseURL = trimRightSlash(url)
+		}
+	}
+}
+
 // WithStockBaseURL 覆盖东方财富股票行情端点 baseURL（仅测试用）。
 //
 // 例如：WithStockBaseURL(httptestServer.URL) 后实际请求 {URL}/api/qt/stock/get?...。
@@ -59,6 +109,18 @@ func WithStockBaseURL(url string) FetcherOption {
 	return func(c *fetcherConfig) {
 		if url != "" {
 			c.stockBaseURL = trimRightSlash(url)
+		}
+	}
+}
+
+// WithStockF10BaseURL 覆盖东方财富股票 F10 基本资料端点 baseURL（仅测试用）。
+//
+// 默认指向 https://datacenter.eastmoney.com，资产元信息探测会请求
+// {URL}/securities/api/data/v1/get?... 解析行业/板块/上市日（push2 接口字段不稳定时的补充源）。
+func WithStockF10BaseURL(url string) FetcherOption {
+	return func(c *fetcherConfig) {
+		if url != "" {
+			c.stockF10BaseURL = trimRightSlash(url)
 		}
 	}
 }
@@ -81,6 +143,18 @@ func WithTencentBaseURL(url string) FetcherOption {
 	return func(c *fetcherConfig) {
 		if url != "" {
 			c.tencentBaseURL = trimRightSlash(url)
+		}
+	}
+}
+
+// WithTushareBaseURL 覆盖 Tushare Pro API 端点 baseURL（仅测试用）。
+//
+// 默认指向 https://api.tushare.pro，TushareFundFetcher 通过
+// {URL}/fund_nav 提取基金净值数据。
+func WithTushareBaseURL(url string) FetcherOption {
+	return func(c *fetcherConfig) {
+		if url != "" {
+			c.tushareBaseURL = trimRightSlash(url)
 		}
 	}
 }

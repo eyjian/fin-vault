@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { useRoute } from 'vue-router'
 import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 
 const route = useRoute()
 
@@ -15,7 +15,8 @@ const menuItems = [
   { path: '/quote', icon: 'Cpu', title: '行情管理' },
   { path: '/rate', icon: 'Switch', title: '汇率维护' },
   { path: '/ai-chat', icon: 'ChatLineRound', title: 'AI 对话' },
-  { path: '/export', icon: 'Download', title: '数据导出' }
+  { path: '/export', icon: 'Download', title: '数据导出' },
+  { path: '/settings', icon: 'Setting', title: '设置' }
 ]
 
 const activeMenu = computed(() => route.path)

@@ -190,20 +190,27 @@ type RateRepository interface {
 }
 
 // =====================================================================
-// AIConversation / AIMessage（dev_2 主用）
+// PulseDiagnosis（AI 把脉结果）
 // =====================================================================
 
-// AIConversationRepository AI 会话与消息一体接口。
-type AIConversationRepository interface {
-	CreateConv(ctx context.Context, c *domain.AIConversation) error
-	GetConv(ctx context.Context, id uint) (*domain.AIConversation, error)
-	UpdateConv(ctx context.Context, c *domain.AIConversation) error
-	IncrTokens(ctx context.Context, id uint, deltaMessages, deltaTokens int) error
-	DeleteConv(ctx context.Context, id uint) error
-	ListConversations(ctx context.Context, userID uint, opts ListOptions) ([]domain.AIConversation, int64, error)
+// PulseDiagnosisRepository AI 把脉结果仓储。
+//
+// 唯一约束 (UserID, AssetID)：每个用户的每个资产只保留最新一条把脉结果，
+// Upsert 由 ON CONFLICT 保证；GetByUserAsset 在记录不存在时返回 (nil, nil)
+// —— 业务上"还未把脉"是常见场景，调用方通过 nil 判空，避免 errors.Is(ErrNotFound)。
+type PulseDiagnosisRepository interface {
+	// Upsert 创建或更新把脉结果。命中 (UserID, AssetID) 时覆盖
+	// Recommendation/Confidence/Summary/Detail/DataReferences/RawResponse/SessionID/TriggerSource/UpdatedAt，
+	// 保留 CreatedAt 与 ID 不变。
+	Upsert(ctx context.Context, d *domain.PulseDiagnosis) error
 
-	AppendMessage(ctx context.Context, m *domain.AIMessage) error
-	ListMessages(ctx context.Context, convID uint, limit int) ([]domain.AIMessage, error)
+	// GetByUserAsset 取单个 (UserID, AssetID) 的最新把脉结果；
+	// 不存在返回 (nil, nil)。
+	GetByUserAsset(ctx context.Context, userID, assetID uint) (*domain.PulseDiagnosis, error)
+
+	// ListByUser 列出用户的把脉结果（按 UpdatedAt 倒序）。
+	// 当 assetIDs 非空时，仅返回这些资产对应的记录（用于资产管理页批量预加载）。
+	ListByUser(ctx context.Context, userID uint, assetIDs []uint) ([]domain.PulseDiagnosis, error)
 }
 
 // =====================================================================
@@ -222,5 +229,6 @@ type Repositories struct {
 	Portfolio      PortfolioRepository
 	Quote          QuoteRepository
 	Rate           RateRepository
-	AIConversation AIConversationRepository
+	PulseDiagnosis PulseDiagnosisRepository
+	SysConfig      SysConfigRepository
 }
