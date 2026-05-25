@@ -62,6 +62,11 @@ func RegisterRoutes(app *App) *gin.Engine {
 		h.AIPulseDiagnosis.Register(v1) // POST /ai/pulse-diagnosis & GET /ai/pulse-diagnosis
 	}
 
+	// 设置页：数据源配置读写
+	if h.Config != nil {
+		h.Config.Register(v1) // GET/PUT /config/data_providers
+	}
+
 	// dev 模式开放手工触发 cron
 	if app.Cfg.Server.Mode == "debug" || app.Cfg.Server.Mode == "test" {
 		v1.POST("/admin/cron/mature/run", func(c *gin.Context) {

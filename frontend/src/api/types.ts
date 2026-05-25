@@ -313,3 +313,25 @@ export interface AssetProbeParams {
   asset_code: string
   market?: 'SH' | 'SZ' | 'HK' | 'US' | 'BJ'
 }
+
+// =====================================================================
+// 多 API 服务商配置（基金净值数据源等）
+// =====================================================================
+
+export interface TushareConfig {
+  enabled: boolean
+  token: string
+  base_url: string
+}
+
+export interface DataProvidersConfig {
+  tushare: TushareConfig
+}
+
+// =====================================================================
+// 后端配置（用于设置页读写）
+// =====================================================================
+
+export interface BackendConfig {
+  data_providers: DataProvidersConfig
+}

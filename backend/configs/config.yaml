@@ -70,6 +70,13 @@ quote:
   http_timeout: 10s
   pool_size: 16
 
+# 多 API 服务商数据源（基金净值等）
+data_providers:
+  tushare:
+    enabled: false                     # 启用 Tushare Pro 数据源
+    token: "${FINVAULT_DATA_PROVIDERS_TUSHARE_TOKEN:}"  # Tushare API Token，从环境变量读取
+    base_url: "https://api.tushare.pro" # Tushare Pro API 地址
+
 # 定时任务
 cron:
   mature_scan: "30 0 * * *"   # 每天 00:30 扫描理财到期

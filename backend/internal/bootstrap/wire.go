@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"gorm.io/gorm"
@@ -45,6 +46,9 @@ type Handlers struct {
 
 	// AIPulseDiagnosis：D16 LLM 不可用时为 nil，router 条件挂载兜底（不注册路由 → 404）。
 	AIPulseDiagnosis *handler.PulseDiagnosisHandler
+
+	// Config：后端配置 HTTP 适配（设置页数据源配置等）。
+	Config *handler.ConfigHandler
 }
 
 // Wire 总装：DB → Repo → Service → Handler。
@@ -104,12 +108,29 @@ func Wire(cfg *Config) (*App, error) {
 
 	// 6. Tools 注册由 §9 装配阶段完成（agent.NewToolsetAgentFactory + Runner 装配）。
 
-	// 6.x Asset Meta Fetcher（资产录入页“按代码自动填充”）
+	// 6.x Asset Meta Fetcher（资产录入页"按代码自动填充"）
 	//
 	// 与 QuoteAggregator 解耦：仅供 AssetProbeService 使用，行情刷新链路不依赖。
 	// 失败语义：fetcher 永远可构造（resty 客户端 + 默认 baseURL），不会返回 nil。
 	metaFetcher := platformapi.NewEastmoneyMetaFetcher(httpTimeout)
 	sinaMetaFetcher := platformapi.NewSinaMetaFetcher(httpTimeout)
+
+	// Tushare 基金净值 Fetcher（需配置 token，否则 Supports 返回 false 被跳过）
+	tushareToken := cfg.DataProviders.Tushare.Token
+	if tushareToken == "" {
+		// 尝试从环境变量读取
+		tushareToken = os.Getenv("FINVAULT_DATA_PROVIDERS_TUSHARE_TOKEN")
+	}
+	var tushareMetaFetcher platformapi.AssetMetaFetcher
+	if cfg.DataProviders.Tushare.Enabled && tushareToken != "" {
+		tushareMetaFetcher = platformapi.NewTushareFundFetcher(httpTimeout, tushareToken)
+	} else {
+		if cfg.DataProviders.Tushare.Enabled {
+			slog.Warn("tushare enabled but no token configured, skipping tushare fetcher")
+		}
+		tushareMetaFetcher = nil
+	}
+
 	// F10 enricher：A 股行业/板块/上市日补全。独立于主 fetcher 链路——
 	// 即便 push2.eastmoney.com 被反爬封 IP（此时主源会降级到新浪），
 	// datacenter.eastmoney.com 仍可访问，让降级路径也能享受 F10 补全。
@@ -122,8 +143,17 @@ func Wire(cfg *Config) (*App, error) {
 	// 7. Services
 	holdingSvc := service.NewHoldingService(repos.Holding, repos.Asset, repos.Quote, repos.Rate, repos.Platform)
 	assetSvc := service.NewAssetService(repos.UoW, repos.Asset, repos.Platform, holdingSvc)
-	assetProbeSvc := service.NewAssetProbeService(metaFetcher, sinaMetaFetcher).
+
+	// 构造 fetcher 链：主源东方财富 → 新浪 → Tushare（仅基金净值）
+	var probeFetchers []platformapi.AssetMetaFetcher
+	probeFetchers = append(probeFetchers, metaFetcher)
+	probeFetchers = append(probeFetchers, sinaMetaFetcher)
+	if tushareMetaFetcher != nil {
+		probeFetchers = append(probeFetchers, tushareMetaFetcher)
+	}
+	assetProbeSvc := service.NewAssetProbeService(probeFetchers...).
 		WithEnrichers(f10Enricher, fundDetailEnricher)
+
 	txnSvc := service.NewTransactionService(repos.UoW, repos.Transaction, repos.Holding, repos.Asset)
 	quoteSvc := service.NewQuoteService(repos.Quote, repos.Asset, cacheProv, aggregator, cfg.Quote.CacheTTL)
 	rateSvc := service.NewRateService(repos.Rate)
@@ -156,7 +186,11 @@ func Wire(cfg *Config) (*App, error) {
 		handlers.AIPulseDiagnosis = handler.NewPulseDiagnosisHandler(pulseSvc, cfg.AI.PulseDiagnosis.Concurrency)
 	}
 
-	// 9. Cron
+	// 9.1 Config handler（设置页数据源配置读写）
+	configSaver := NewConfigSaverAdapter(cfg)
+	handlers.Config = handler.NewConfigHandler(configSaver)
+
+	// 9.2 Cron
 	cm := NewCronManager(matureSvc, cfg.Cron.Mature)
 
 	app := &App{

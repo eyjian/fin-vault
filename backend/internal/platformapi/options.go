@@ -29,6 +29,9 @@ type fetcherConfig struct {
 
 	// tencent
 	tencentBaseURL string // 默认 https://qt.gtimg.cn
+
+	// tushare
+	tushareBaseURL string // 默认 https://api.tushare.pro
 }
 
 // defaultConfig 返回填好默认 base URL 的配置。
@@ -46,6 +49,7 @@ func defaultConfig(timeout time.Duration) *fetcherConfig {
 		stockF10BaseURL:   "https://datacenter.eastmoney.com",
 		sinaBaseURL:       "https://hq.sinajs.cn",
 		tencentBaseURL:    "https://qt.gtimg.cn",
+		tushareBaseURL:    "https://api.tushare.pro",
 	}
 }
 
@@ -139,6 +143,18 @@ func WithTencentBaseURL(url string) FetcherOption {
 	return func(c *fetcherConfig) {
 		if url != "" {
 			c.tencentBaseURL = trimRightSlash(url)
+		}
+	}
+}
+
+// WithTushareBaseURL 覆盖 Tushare Pro API 端点 baseURL（仅测试用）。
+//
+// 默认指向 https://api.tushare.pro，TushareFundFetcher 通过
+// {URL}/fund_nav 提取基金净值数据。
+func WithTushareBaseURL(url string) FetcherOption {
+	return func(c *fetcherConfig) {
+		if url != "" {
+			c.tushareBaseURL = trimRightSlash(url)
 		}
 	}
 }

@@ -37,6 +37,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/quote', component: lazy(() => import('@/views/QuoteManage.vue')), meta: { title: '行情管理' } },
   { path: '/rate', component: lazy(() => import('@/views/RateManage.vue')), meta: { title: '汇率维护' } },
   { path: '/ai-chat', component: lazy(() => import('@/views/AIChat.vue')), meta: { title: 'AI 对话' } },
+  { path: '/settings', component: lazy(() => import('@/views/Settings.vue')), meta: { title: '设置' } },
   { path: '/export', component: lazy(() => import('@/views/ExportPage.vue')), meta: { title: '数据导出' } }
 ]
 
